@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Arena.io</title>
+    <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+    <canvas id="gc"></canvas>
+    
+    <div id="ui">
+        <div id="zone-txt">STREFA BEZPIECZNA</div>
+        <div id="lvl-txt">LVL 1</div>
+
+        <div class="bar-wrap" id="hp-wrap">
+            <div class="bar-bg">
+                <div class="bar-fill" id="hp-fill" style="width:100%"></div>
+                <div class="bar-txt" id="hp-txt">100 / 100</div>
+            </div>
+        </div>
+
+        <div class="bar-wrap" id="xp-wrap">
+            <div class="bar-bg">
+                <div class="bar-fill" id="xp-fill" style="width:0%"></div>
+                <div class="bar-txt" id="xp-txt">0 / 100</div>
+            </div>
+        </div>
+
+        <div id="w-slots">
+            <div class="ws" id="ws0"><span class="wi">—</span><span class="wn"></span></div>
+            <div class="ws" id="ws1"><span class="wi">—</span><span class="wn"></span></div>
+            <div class="ws" id="ws2"><span class="wi">—</span><span class="wn"></span></div>
+            <div class="ws" id="ws3"><span class="wi">—</span><span class="wn"></span></div>
+        </div>
+
+        <div class="kf" id="kf"></div>
+    </div>
+    
+    <canvas id="minimap" width="110" height="110"></canvas>
+
+    <div id="scoreboard">
+        <div id="scoreboard-title">🏆 RANKING</div>
+        <div id="scoreboard-list"></div>
+    </div>
+
+    <div class="screen" id="s-menu">
+        <div class="s-title title-gradient">ARENA.IO</div>
+        <div class="s-sub">wybierz klasę postaci</div>
+        <div class="cls-grid" id="cls-grid"></div>
+        <div id="perm-disp"></div>
+    </div>
+
+    <div class="screen" id="s-lobby" style="display:none">
+        <div class="s-title title-gradient">ARENA.IO</div>
+        <div class="s-sub">panel gracza</div>
+
+        <div class="panel-box">
+            <div class="input-label">Twoja nazwa</div>
+            <input type="text" id="player-name" class="input-field" maxlength="16" placeholder="Wpisz swoją nazwę...">
+            <div class="input-hint">Max 16 znaków</div>
+        </div>
+
+        <div class="lobby-grid">
+            <button class="lobby-btn btn-quick" id="btn-quick-join">⚡ Szybka Gra</button>
+            <button class="lobby-btn btn-join" id="btn-join-code">🔑 Dołącz przez Kod</button>
+        </div>
+
+        <button class="lobby-btn btn-create" id="btn-create-room">🎮 Stwórz Pokój</button>
+
+        <div id="perm-disp-lobby" class="input-hint mt-24"></div>
+    </div>
+
+    <div class="screen" id="s-room-config" style="display:none">
+        <div class="s-title title-warning">KONFIGURACJA POKOJU</div>
+        <div class="s-sub">dostosuj ustawienia</div>
+
+        <div class="panel-box w-420">
+            <div class="form-group">
+                <label class="input-label">Maksymalna liczba graczy</label>
+                <input type="range" id="room-max-players" class="slider" min="2" max="12" value="8">
+                <div class="slider-val" id="room-max-display">8</div>
+            </div>
+            
+            <div class="form-group">
+                <label class="input-label">Trudność</label>
+                <select id="room-difficulty" class="input-field">
+                    <option value="easy">🟢 Łatwa</option>
+                    <option value="medium" selected>🟡 Średnia</option>
+                    <option value="hard">🔴 Trudna</option>
+                    <option value="extreme">💀 Ekstremalna</option>
+                </select>
+            </div>
+            
+            <div class="form-group">
+                <label class="checkbox-wrapper">
+                    <input type="checkbox" id="room-friendly-fire" class="checkbox-input">
+                    <span class="checkbox-text">Friendly Fire (PvP między graczami)</span>
+                </label>
+            </div>
+            
+            <div class="form-group">
+                <label class="input-label">Prywatność</label>
+                <select id="room-privacy" class="input-field">
+                    <option value="public">🌐 Publiczny (wszyscy mogą dołączyć)</option>
+                    <option value="private">🔒 Prywatny (tylko z kodem)</option>
+                </select>
+            </div>
+        </div>
+
+        <div class="btn-group">
+            <button class="btn" id="btn-config-back">← Wróć</button>
+            <button class="btn btn-warning" id="btn-config-create">Utwórz Pokój →</button>
+        </div>
+    </div>
+
+    <div class="screen" id="s-join-code" style="display:none">
+        <div class="s-title title-success">DOŁĄCZ DO POKOJU</div>
+        <div class="s-sub">wprowadź kod pokoju</div>
+
+        <div class="panel-box w-420">
+            <input type="text" id="room-code-input" class="input-code" maxlength="6" placeholder="ABC123">
+            <div class="input-hint center">Kod składa się z 6 znaków</div>
+        </div>
+
+        <div class="btn-group">
+            <button class="btn" id="btn-code-back">← Wróć</button>
+            <button class="btn btn-success" id="btn-code-join">Dołącz →</button>
+        </div>
+    </div>
+
+    <div class="screen" id="s-waiting-room" style="display:none">
+        <div class="s-title title-primary">POCZEKALNIA</div>
+        <div class="s-sub">kod pokoju: <span id="waiting-room-code" class="code-highlight">------</span></div>
+
+        <div class="panel-box w-480 mb-20">
+            <div class="input-label">Gracze w pokoju</div>
+            <div id="waiting-players-list" class="player-list"></div>
+        </div>
+
+        <div class="waiting-status">Oczekiwanie na start... <span id="waiting-count">1/8</span></div>
+
+        <div class="btn-group">
+            <button class="btn" id="btn-leave-room">← Opuść Pokój</button>
+            <button class="btn btn-success" id="btn-start-game" style="display:none;">▶ Rozpocznij Grę</button>
+        </div>
+    </div>
+
+    <div class="screen" id="s-upgrade" style="display:none">
+        <div class="s-title title-warning">POZIOM WYŻEJ</div>
+        <div class="s-sub">wybierz ulepszenie</div>
+        <div class="up-cards" id="up-cards"></div>
+    </div>
+
+    <div class="screen" id="s-death" style="display:none">
+        <div class="s-title title-danger">ZGINĄŁEŚ</div>
+        <div class="death-stats" id="death-stats"></div>
+        <div class="btn-group" id="death-btn-group">
+            <button class="btn" id="btn-perm">ULEPSZENIA PERMANENTNE →</button>
+        </div>
+    </div>
+
+    <div class="screen" id="s-perm" style="display:none">
+        <div class="s-title title-warning">ULEPSZENIA PERMANENTNE</div>
+        <div class="s-sub">zainwestuj punkty</div>
+        <div id="perm-pts"></div>
+        <div class="perm-cards" id="perm-cards"></div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script type="module" src="js/main.js"></script>
+</body>
+</html>
