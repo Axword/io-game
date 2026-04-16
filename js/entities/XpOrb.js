@@ -1,3 +1,4 @@
+// entities/XpOrb.js
 export class XpOrb {
     constructor(x, y, val, scene) {
         this.x = x;
@@ -22,19 +23,15 @@ export class XpOrb {
         
         if (d < 180) {
             const spd = Math.min(8, 180 / Math.max(d, 1));
-            const dx = player.x - this.x;
-            const dy = player.y - this.y;
-            const len = Math.hypot(dx, dy);
-            const nx = dx / len;
-            const ny = dy / len;
-            this.x += nx * spd * dt * 60;
-            this.y += ny * spd * dt * 60;
+            const len = Math.hypot(player.x - this.x, player.y - this.y);
+            this.x += ((player.x - this.x) / len) * spd * dt * 60;
+            this.y += ((player.y - this.y) / len) * spd * dt * 60;
         }
         
         this.mesh.position.set(this.x, this.y, 1);
         this.mesh.rotation.z += dt * 2;
         
-        return d < 22; // collected
+        return d < 22;
     }
     
     destroy() {

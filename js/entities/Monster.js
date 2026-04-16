@@ -1,236 +1,319 @@
+// entities/Monster.js
+import { Entity } from './Entity.js';
 import { mkShape } from '../utils/geometry.js';
-import { rng, norm, getZoneIdx } from '../utils/math.js';
+import { rng, getZoneIdx } from '../utils/math.js';
 import { Bullet } from './Bullet.js';
+import { MONSTER_CONFIG } from '../config/monsters.js';
 
-export class Monster {
-    constructor(x, y, zoneIdx, zones, scene, hpMult = 1.0) {
-        this.x = x;
-        this.y = y;
+export class Monster extends Entity {
+    constructor(x, y, zoneIdx, zones, scene, hpMult = 1.0, isBoss = false) {
+        super(x, y, scene);
         this.zoneIdx = Math.max(0, zoneIdx);
         this.zones = zones;
-        console.log(`Spawning monster in zone ${this.zoneIdx} at (${this.x.toFixed(1)}, ${this.y.toFixed(1)})`);
-        this.scene = scene;
-        
-        const zi = this.zoneIdx;
-        const z = zones[zi];
-        const sc = z.mScale;
-        
-        this.isElite = Math.random() < 0.01;
-        
-        const shapeType = this.getShapeForZone(zi);
-        
-        const baseHp = 20 + zi * 15;
-        const baseDmg = 8 + zi * 5;
-        const baseSz = 14 + zi * 4;
-        const baseXp = 10 + zi * 8;
-        
-        const eliteMult = this.isElite ? 5 : 1;
-        const eliteSpeedMult = this.isElite ? 1.25 : 1;
-        const eliteXpMult = this.isElite ? 10 : 1;
-        
-        this.maxHp = Math.round(baseHp * sc * eliteMult * hpMult);
-        this.hp = this.maxHp;
-        this.dmg = Math.round(baseDmg * sc);
-        this.spd = (z.monsterSpeed || 1.4) * eliteSpeedMult;
-        this.sz = baseSz * (0.85 + sc * 0.05) * (this.isElite ? 1.3 : 1);
-        this.xp = Math.round(baseXp * sc * eliteXpMult);
-        this.type = shapeType;
-        this.baseColor = this.getColorForZone(zi);
-        
-        const meshColor = this.isElite ? this.getLighterColor(this.baseColor) : this.baseColor;
-        
-        this.mesh = mkShape(shapeType, this.sz, meshColor);
-        this.mesh.position.set(x, y, 2);
-        scene.add(this.mesh);
-        
-        const outlineColor = this.isElite ? 0xffff00 : 0x000000;
-        const outlineOpacity = this.isElite ? 0.6 : 0.2;
-        
-        this.outline = mkShape(shapeType, this.sz * 1.2, outlineColor);
-        this.outline.material.transparent = true;
-        this.outline.material.opacity = outlineOpacity;
-        this.outline.position.set(x, y, 1.9);
-        scene.add(this.outline);
-        
-        if (this.isElite) {
-            this.glowRing = mkShape(shapeType, this.sz * 1.4, 0xffaa00);
-            this.glowRing.material.transparent = true;
-            this.glowRing.material.opacity = 0.3;
-            this.glowRing.position.set(x, y, 1.8);
-            scene.add(this.glowRing);
+        this.isBoss = isBoss;
+        this.hitTimer = 0;
+        this.shootTimer = rng(2, 4);
+        this.currentTarget = null;
+        this.outsideZoneTimer = 0;
+        this.despawnTimer = 0;
+        this.state = 'attacking';
+        this.retreatTarget = null; // Cel ucieczki
+        this.isDespawning = false; // Czy w trakcie despawnu
+
+        if (!isBoss) {
+            this.initMonster(zones, hpMult);
         }
         
-        this.hpBarBg = new THREE.Mesh(
-            new THREE.PlaneGeometry(this.sz * 1.6, 3),
-            new THREE.MeshBasicMaterial({ color: this.isElite ? 0x442200 : 0x220000 })
-        );
-        this.hpBarBg.position.set(x, y + this.sz + 4, 2.5);
-        scene.add(this.hpBarBg);
+        this.canShoot = this.isBoss || this.zoneIdx <= 1;
+        this.shootRange = this.getShootingStat('ranges');
+        this.bulletSpeed = this.getShootingStat('speeds');
+        this.bulletLifetime = this.getShootingStat('lifetimes');
+    }
+
+    getShootingStat(stat) {
+        const data = MONSTER_CONFIG.shooting[stat];
+        if (this.isBoss) return data.boss;
+        return data[this.zoneIdx] || 0;
+    }
+
+    initMonster(zones, hpMult) {
+        const z = zones[this.zoneIdx];
+        const sc = z.mScale;
+        const base = MONSTER_CONFIG.base;
+        const bonus = MONSTER_CONFIG.zoneBonus;
+        const elite = MONSTER_CONFIG.elite;
+        const zoneMultiplier = 4 - this.zoneIdx;
         
-        this.hpBarFg = new THREE.Mesh(
-            new THREE.PlaneGeometry(this.sz * 1.6, 3),
-            new THREE.MeshBasicMaterial({ color: this.isElite ? 0xffaa00 : 0xff3333 })
-        );
-        this.hpBarFg.position.set(x, y + this.sz + 4, 2.6);
-        scene.add(this.hpBarFg);
+        this.isElite = Math.random() < elite.chance;
+        this.type = this.getShapeForZone();
         
-        this.hitTimer = 0;
-        this.shootTimer = rng(1, 3);
+        const eliteHpMult = this.isElite ? elite.hpMult : 1;
+        const eliteSpeedMult = this.isElite ? elite.speedMult : 1;
+        const eliteXpMult = this.isElite ? elite.xpMult : 1;
+        const eliteSizeMult = this.isElite ? elite.sizeMult : 1;
+        
+        this.maxHp = Math.round((base.hp + zoneMultiplier * bonus.hp) * sc * eliteHpMult * hpMult);
+        this.hp = this.maxHp;
+        this.dmg = Math.round((base.dmg + zoneMultiplier * bonus.dmg) * sc);
+        this.spd = (z.monsterSpeed || 1.4) * eliteSpeedMult;
+        this.sz = (base.sz + zoneMultiplier * bonus.sz) * (0.85 + sc * 0.05) * eliteSizeMult;
+        this.xp = Math.round((base.xp + zoneMultiplier * bonus.xp) * sc * eliteXpMult);
+        this.baseColor = MONSTER_CONFIG.colors[Math.min(this.zoneIdx, MONSTER_CONFIG.colors.length - 1)];
+        
         this.spawnZoneMin = z.minR;
         this.spawnZoneMax = z.maxR;
         
-        this.currentTarget = null;
-        this.chaseTimer = 0;
-        this.returnTimer = 0;
-        this.state = 'idle';
+        this.createMesh(this.type, this.sz, this.baseColor, this.isElite);
     }
-    
-    getShapeForZone(zi) {
-        if (zi === 3 || zi === 4) {
-            return ['tri', 'sq'][Math.floor(Math.random() * 2)];
-        } else if (zi === 1 || zi === 2) {
-            return ['pent', 'hex'][Math.floor(Math.random() * 2)];
-        } else {
-            const eliteChance = Math.random();
-            if (eliteChance < 0.05) {
-                return ['tri', 'sq', 'pent', 'hex'][Math.floor(Math.random() * 4)];
-            } else {
-                return ['hept', 'oct', 'non'][Math.floor(Math.random() * 3)];
-            }
-        }
+
+    getShapeForZone() {
+        const zi = this.zoneIdx;
+        const shapes = MONSTER_CONFIG.shapes;
+        if (zi <= 1) return shapes.low[Math.floor(Math.random() * 2)];
+        if (zi <= 3) return shapes.mid[Math.floor(Math.random() * 2)];
+        if (Math.random() < 0.05) return shapes.mid[Math.floor(Math.random() * 2)];
+        return shapes.high[Math.floor(Math.random() * 3)];
     }
-    
-    getColorForZone(zi) {
-        const colors = [0x880000, 0xaa0000, 0x660066, 0x006666, 0x555555, 0x330033];
-        return colors[Math.min(zi, colors.length - 1)];
-    }
-    
+
     getLighterColor(color) {
-        const r = ((color >> 16) & 0xff);
-        const g = ((color >> 8) & 0xff);
-        const b = (color & 0xff);
-        
-        const newR = Math.min(255, r + 100);
-        const newG = Math.min(255, g + 100);
-        const newB = Math.min(255, b + 100);
-        
-        return (newR << 16) | (newG << 8) | newB;
+        const r = Math.min(255, ((color >> 16) & 0xff) + 100);
+        const g = Math.min(255, ((color >> 8) & 0xff) + 100);
+        const b = Math.min(255, (color & 0xff) + 100);
+        return (r << 16) | (g << 8) | b;
     }
-    
+
+    createMesh(shapeType, size, color, isElite = false) {
+        const meshColor = isElite ? this.getLighterColor(color) : color;
+        
+        this.mesh = mkShape(shapeType, size, meshColor);
+        this.mesh.position.set(this.x, this.y, 2);
+        this.scene.add(this.mesh);
+        
+        this.createOutline(shapeType, size * 1.2, isElite ? 0xffff00 : 0x000000, isElite ? 0.6 : 0.2, 1.9);
+        
+        if (isElite) {
+            this.glowRing = mkShape(shapeType, size * 1.4, 0xffaa00);
+            this.glowRing.material.transparent = true;
+            this.glowRing.material.opacity = 0.3;
+            this.glowRing.position.set(this.x, this.y, 1.8);
+            this.scene.add(this.glowRing);
+        }
+        
+        this.createHealthBar(size, isElite);
+    }
+
+    createHealthBar(size, isElite = false) {
+        const barWidth = this.isBoss ? size * 2 : size * 1.6;
+        const barHeight = this.isBoss ? 6 : 3;
+        const barOffset = this.isBoss ? size + 10 : size + 4;
+        const bgColor = isElite || this.isBoss ? 0x442200 : 0x220000;
+        const fgColor = this.isBoss ? 0xff0000 : (isElite ? 0xffaa00 : 0xff3333);
+        
+        this.hpBarBg = new THREE.Mesh(
+            new THREE.PlaneGeometry(barWidth, barHeight),
+            new THREE.MeshBasicMaterial({ color: bgColor })
+        );
+        this.hpBarBg.position.set(this.x, this.y + barOffset, 2.5);
+        this.scene.add(this.hpBarBg);
+        
+        this.hpBarFg = new THREE.Mesh(
+            new THREE.PlaneGeometry(barWidth, barHeight),
+            new THREE.MeshBasicMaterial({ color: fgColor })
+        );
+        this.hpBarFg.position.set(this.x, this.y + barOffset, 2.6);
+        this.scene.add(this.hpBarFg);
+    }
+
     findNearestTarget(targets) {
         let nearest = null;
         let minDist = Infinity;
         
         for (const target of targets) {
+            if (target.hp <= 0) continue;
             const dist = Math.hypot(target.x - this.x, target.y - this.y);
-            const targetZone = getZoneIdx(target.x, target.y, this.zones);
             
-            if (targetZone === this.zoneIdx && dist < minDist) {
+            if (dist < minDist) {
                 minDist = dist;
                 nearest = target;
             }
         }
-        
         return { target: nearest, distance: minDist };
     }
-    
-    isInMyZone() {
-        const dist = Math.hypot(this.x, this.y);
-        return dist >= this.spawnZoneMin && dist <= this.spawnZoneMax;
+
+    findTargetInMyZone(targets) {
+        let nearest = null;
+        let minDist = Infinity;
+        
+        for (const target of targets) {
+            if (target.hp <= 0) continue;
+            const targetZone = getZoneIdx(target.x, target.y, this.zones);
+            if (targetZone !== this.zoneIdx) continue;
+            
+            const dist = Math.hypot(target.x - this.x, target.y - this.y);
+            if (dist < minDist) {
+                minDist = dist;
+                nearest = target;
+            }
+        }
+        return nearest;
     }
-    
+
     isTargetInMyZone(target) {
-        if (!target) return false;
-        const targetZone = getZoneIdx(target.x, target.y, this.zones);
-        return targetZone === this.zoneIdx;
+        if (!target || this.isBoss) return true;
+        return getZoneIdx(target.x, target.y, this.zones) === this.zoneIdx;
     }
-    
-    update(dt, targets, safeRadius, bullets, scene) {
-        const inMyZone = this.isInMyZone();
+
+    // Znajdź najbliższy punkt w mojej strefie daleko od wszystkich graczy
+    findRetreatPoint(targets) {
+        const targetDist = (this.spawnZoneMin + this.spawnZoneMax) / 2;
+        const randomAngle = Math.random() * Math.PI * 2;
         
-        if (this.state === 'idle' || this.state === 'wandering') {
-            const { target, distance } = this.findNearestTarget(targets);
+        // Szukaj punktu w przeciwnym kierunku od najbliższego gracza
+        const nearestPlayer = this.findNearestTarget(targets);
+        if (nearestPlayer.target) {
+            const angleAwayFromPlayer = Math.atan2(
+                this.y - nearestPlayer.target.y,
+                this.x - nearestPlayer.target.x
+            );
             
-            if (target && distance < 800) {
-                this.currentTarget = target;
-                this.state = 'chasing';
-                this.chaseTimer = 0;
-            } else if (this.zoneIdx === 0) {
-                this.state = 'wandering';
-                this.wanderBehavior(dt);
-            }
+            // Dodaj trochę losowości
+            const finalAngle = angleAwayFromPlayer + (Math.random() - 0.5) * Math.PI / 2;
+            
+            return {
+                x: Math.cos(finalAngle) * targetDist,
+                y: Math.sin(finalAngle) * targetDist
+            };
         }
         
-        if (this.state === 'chasing') {
-            if (!this.currentTarget || this.currentTarget.hp <= 0) {
-                this.currentTarget = null;
-                this.state = 'idle';
-                return;
-            }
-            
-            const targetInZone = this.isTargetInMyZone(this.currentTarget);
-            
-            if (targetInZone) {
-                this.chaseTimer = 0;
-            } else {
-                this.chaseTimer += dt;
-            }
-            
-            if (this.chaseTimer > 3.5) {
-                this.state = 'returning';
-                this.returnTimer = 0;
-                this.currentTarget = null;
-            } else {
-                this.chaseTarget(dt, bullets, scene);
-            }
-        }
+        // Jeśli nie ma graczy, losowy punkt w strefie
+        return {
+            x: Math.cos(randomAngle) * targetDist,
+            y: Math.sin(randomAngle) * targetDist
+        };
+    }
+
+    // Sprawdź czy są gracze w pobliżu podczas ucieczki
+    checkForNearbyPlayers(targets) {
+        const detectionRange = 800; // Zasięg wykrywania
         
-        if (this.state === 'returning') {
-            this.returnTimer += dt;
+        for (const target of targets) {
+            if (target.hp <= 0) continue;
+            const dist = Math.hypot(target.x - this.x, target.y - this.y);
             
-            if (inMyZone) {
-                this.state = 'idle';
-                this.returnTimer = 0;
-            } else {
-                const { target, distance } = this.findNearestTarget(targets);
-                
-                if (target && distance < 400 && this.isTargetInMyZone(target)) {
-                    this.currentTarget = target;
-                    this.state = 'chasing';
-                    this.chaseTimer = 0;
-                } else {
-                    this.returnToZone(dt);
-                    
-                    if (this.returnTimer > 10) {
-                        this.hp = -1;
-                        return;
-                    }
+            if (dist < detectionRange) {
+                const targetZone = getZoneIdx(target.x, target.y, this.zones);
+                // Atakuj jeśli gracz jest w twojej strefie lub bardzo blisko
+                if (targetZone === this.zoneIdx || dist < 400) {
+                    return target;
                 }
             }
+        }
+        return null;
+    }
+
+    update(dt, targets, safeRadius, bullets, scene) {
+        if (this.state === 'attacking') {
+            this.handleAttacking(dt, targets, bullets, scene);
+        } else if (this.state === 'returning') {
+            this.handleReturning(dt, targets, bullets, scene);
+        } else if (this.state === 'despawning') {
+            this.handleDespawning(dt, targets, bullets, scene);
         }
         
         this.updateVisuals(dt);
     }
-    
-    wanderBehavior(dt) {
-        if (!this.wanderAngle || Math.random() < 0.02) {
-            this.wanderAngle = Math.random() * Math.PI * 2;
+
+    handleAttacking(dt, targets, bullets, scene) {
+        if (!this.currentTarget || this.currentTarget.hp <= 0) {
+            this.currentTarget = this.findTargetInMyZone(targets);
+            
+            if (!this.currentTarget) {
+                this.state = 'returning';
+                this.outsideZoneTimer = 0;
+                this.retreatTarget = this.findRetreatPoint(targets);
+                return;
+            }
         }
         
-        const moveSpeed = this.spd * 0.3;
-        const nextX = this.x + Math.cos(this.wanderAngle) * moveSpeed * dt * 55;
-        const nextY = this.y + Math.sin(this.wanderAngle) * moveSpeed * dt * 55;
-        const nextDist = Math.hypot(nextX, nextY);
+        const targetInZone = this.isTargetInMyZone(this.currentTarget);
         
-        if (nextDist >= this.spawnZoneMin && nextDist <= this.spawnZoneMax) {
-            this.x = nextX;
-            this.y = nextY;
+        if (targetInZone) {
+            this.outsideZoneTimer = 0;
+            this.chaseAndAttack(dt, bullets, scene);
         } else {
-            this.wanderAngle = Math.random() * Math.PI * 2;
+            this.outsideZoneTimer += dt;
+            
+            if (this.outsideZoneTimer < MONSTER_CONFIG.chase.outsideZoneTimeout) {
+                this.chaseAndAttack(dt, bullets, scene);
+            } else {
+                const newTarget = this.findTargetInMyZone(targets);
+                if (newTarget) {
+                    this.currentTarget = newTarget;
+                    this.outsideZoneTimer = 0;
+                } else {
+                    this.state = 'returning';
+                    this.outsideZoneTimer = 0;
+                    this.retreatTarget = this.findRetreatPoint(targets);
+                }
+            }
         }
     }
-    
-    chaseTarget(dt, bullets, scene) {
+
+    handleReturning(dt, targets, bullets, scene) {
+        // Sprawdź czy są gracze w pobliżu
+        const nearbyPlayer = this.checkForNearbyPlayers(targets);
+        if (nearbyPlayer) {
+            this.currentTarget = nearbyPlayer;
+            this.state = 'attacking';
+            this.outsideZoneTimer = 0;
+            this.isDespawning = false;
+            return;
+        }
+        
+        // Idź do punktu ucieczki
+        if (!this.retreatTarget) {
+            this.retreatTarget = this.findRetreatPoint(targets);
+        }
+        
+        const dx = this.retreatTarget.x - this.x;
+        const dy = this.retreatTarget.y - this.y;
+        const distToRetreat = Math.hypot(dx, dy);
+        
+        if (distToRetreat < 100) {
+            // Dotarłeś do punktu ucieczki, rozpocznij despawn
+            this.state = 'despawning';
+            this.despawnTimer = 0;
+            this.isDespawning = true;
+            return;
+        }
+        
+        this.moveToward(this.retreatTarget.x, this.retreatTarget.y, this.spd * 1.5, dt);
+    }
+
+    handleDespawning(dt, targets, bullets, scene) {
+        // Sprawdź czy są gracze w pobliżu - jeśli tak, anuluj despawn i atakuj
+        const nearbyPlayer = this.checkForNearbyPlayers(targets);
+        if (nearbyPlayer) {
+            this.currentTarget = nearbyPlayer;
+            this.state = 'attacking';
+            this.outsideZoneTimer = 0;
+            this.despawnTimer = 0;
+            this.isDespawning = false;
+            return;
+        }
+        
+        this.despawnTimer += dt;
+        
+        // Usuń potwora bez dawania XP
+        if (this.despawnTimer > MONSTER_CONFIG.despawn.timeout) {
+            this.hp = -1;
+            this.isDespawning = true; // Flaga że to despawn, nie śmierć
+        }
+    }
+
+    chaseAndAttack(dt, bullets, scene) {
+        if (!this.currentTarget) return;
+        
         const dx = this.currentTarget.x - this.x;
         const dy = this.currentTarget.y - this.y;
         const distance = Math.hypot(dx, dy);
@@ -240,72 +323,62 @@ export class Monster {
         const nx = dx / distance;
         const ny = dy / distance;
         
-        this.shootTimer -= dt;
-        if (this.shootTimer <= 0 && distance < 600) {
-            this.shootTimer = rng(1.5, 3);
-            this.shootAtTarget(this.currentTarget, bullets, scene);
+        if (this.canShoot && distance < this.shootRange) {
+            this.shootTimer -= dt;
+            if (this.shootTimer <= 0) {
+                const cooldown = this.isBoss 
+                    ? MONSTER_CONFIG.shooting.cooldowns.boss 
+                    : MONSTER_CONFIG.shooting.cooldowns.normal;
+                this.shootTimer = rng(cooldown[0], cooldown[1]);
+                this.shootAtTarget(this.currentTarget, bullets, scene);
+            }
         }
         
-        const attackRange = 50;
-        const moveSpeed = distance < attackRange ? this.spd * 0.5 : this.spd;
+        const attackRange = this.isBoss 
+            ? MONSTER_CONFIG.attack.bossRange 
+            : MONSTER_CONFIG.attack.normalRange;
+        const moveSpeed = distance < attackRange 
+            ? this.spd * MONSTER_CONFIG.attack.slowdownFactor 
+            : this.spd;
         
         this.x += nx * moveSpeed * dt * 55;
         this.y += ny * moveSpeed * dt * 55;
     }
-    
-    returnToZone(dt) {
-        const centerX = 0;
-        const centerY = 0;
-        
-        const targetDist = (this.spawnZoneMin + this.spawnZoneMax) / 2;
-        const currentAngle = Math.atan2(this.y, this.x);
-        
-        const targetX = Math.cos(currentAngle) * targetDist;
-        const targetY = Math.sin(currentAngle) * targetDist;
-        
+
+    moveToward(targetX, targetY, speed, dt) {
         const dx = targetX - this.x;
         const dy = targetY - this.y;
         const distance = Math.hypot(dx, dy);
-        
-        if (distance < 10) {
-            this.state = 'idle';
-            return;
-        }
-        
-        const nx = dx / distance;
-        const ny = dy / distance;
-        
-        this.x += nx * this.spd * 1.2 * dt * 55;
-        this.y += ny * this.spd * 1.2 * dt * 55;
+        if (distance < 1) return;
+        this.x += (dx / distance) * speed * dt * 55;
+        this.y += (dy / distance) * speed * dt * 55;
     }
-    
+
     shootAtTarget(target, bullets, scene) {
         const dx = target.x - this.x;
         const dy = target.y - this.y;
         const len = Math.hypot(dx, dy);
-        const nx = dx / len;
-        const ny = dy / len;
+        
+        const bulletColor = this.isBoss ? 0xff00ff : (this.isElite ? 0xffaa44 : 0xff6666);
+        const bulletSize = this.isBoss ? 1.5 : (this.isElite ? 1.2 : 1);
         
         const bullet = new Bullet(
             this.x, this.y,
-            nx * 8, ny * 8,
-            this.dmg * 0.5,
-            'monster',
-            'mine',
-            this.isElite ? 1.3 : 1,
-            0,
-            0,
-            this.isElite ? 0xffaa44 : 0xff4444,
-            scene
+            (dx / len) * this.bulletSpeed, (dy / len) * this.bulletSpeed,
+            this.dmg * 0.4,
+            this.isBoss ? 'boss' : 'monster',
+            'wand', bulletSize, 0, 0, bulletColor, scene
         );
-        bullet.life = 4;
+        bullet.life = this.bulletLifetime;
         bullets.push(bullet);
     }
-    
+
     updateVisuals(dt) {
         this.mesh.position.set(this.x, this.y, 2);
         this.outline.position.set(this.x, this.y, 1.9);
-        this.mesh.rotation.z += dt * 0.8;
+        
+        const rotationSpeed = this.state === 'despawning' ? 2.0 : 0.8;
+        this.mesh.rotation.z += dt * rotationSpeed;
         this.outline.rotation.z = this.mesh.rotation.z;
         
         if (this.glowRing) {
@@ -314,38 +387,58 @@ export class Monster {
             this.glowRing.material.opacity = 0.3 + Math.sin(Date.now() * 0.005) * 0.15;
         }
         
+        this.updateHealthBar();
+        this.updateHitEffect(dt);
+        this.updateStateEffect();
+    }
+
+    updateHealthBar() {
         const hpPct = this.hp / this.maxHp;
-        this.hpBarBg.position.set(this.x, this.y + this.sz + 4, 2.5);
-        this.hpBarFg.position.set(
-            this.x - (this.sz * 1.6 * (1 - hpPct)) / 2,
-            this.y + this.sz + 4,
-            2.6
-        );
-        this.hpBarFg.scale.x = hpPct;
+        const barWidth = this.isBoss ? this.sz * 2 : this.sz * 1.6;
+        const barOffset = this.isBoss ? this.sz + 10 : this.sz + 4;
         
+        this.hpBarBg.position.set(this.x, this.y + barOffset, 2.5);
+        this.hpBarFg.position.set(this.x - (barWidth * (1 - hpPct)) / 2, this.y + barOffset, 2.6);
+        this.hpBarFg.scale.x = hpPct;
+    }
+
+    updateHitEffect(dt) {
         if (this.hitTimer > 0) {
             this.hitTimer -= dt;
             this.mesh.material.color.setHex(0xffffff);
         } else {
-            this.mesh.material.color.setHex(this.isElite ? this.getLighterColor(this.baseColor) : this.baseColor);
+            const color = this.isBoss ? this.baseColor : (this.isElite ? this.getLighterColor(this.baseColor) : this.baseColor);
+            this.mesh.material.color.setHex(color);
         }
     }
-    
+
+    updateStateEffect() {
+        const fading = this.state === 'despawning' || this.state === 'returning';
+        const opacity = this.state === 'despawning' ? 
+            Math.max(0.1, 0.7 - this.despawnTimer) : 
+            (this.state === 'returning' ? 0.85 : 1);
+        
+        this.mesh.material.transparent = fading;
+        this.mesh.material.opacity = opacity;
+        this.outline.material.opacity = (this.isElite ? 0.6 : 0.2) * opacity;
+    }
+
     takeDamage(amount) {
         this.hp -= amount;
         this.hitTimer = 0.1;
         
-        if (this.state === 'idle' || this.state === 'wandering') {
-            this.state = 'chasing';
-            this.chaseTimer = 0;
+        // Otrzymanie obrażeń anuluje despawn i powrót
+        if (this.state === 'despawning' || this.state === 'returning') {
+            this.state = 'attacking';
+            this.outsideZoneTimer = 0;
+            this.isDespawning = false;
         }
     }
-    
+
     destroy() {
-        if (this.mesh) this.scene.remove(this.mesh);
-        if (this.outline) this.scene.remove(this.outline);
-        if (this.glowRing) this.scene.remove(this.glowRing);
-        if (this.hpBarBg) this.scene.remove(this.hpBarBg);
-        if (this.hpBarFg) this.scene.remove(this.hpBarFg);
+        super.destroy();
+        this.removeMesh(this.glowRing);
+        this.removeMesh(this.hpBarBg);
+        this.removeMesh(this.hpBarFg);
     }
 }

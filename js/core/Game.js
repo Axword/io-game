@@ -255,11 +255,13 @@ export class Game {
     
     cleanupDead() {
         this.monsters.filter(m => m.hp <= 0).forEach(m => {
-            if (this.player && Math.hypot(m.x - this.player.x, m.y - this.player.y) < 1000) {
-                this.hud.addKillFeed('Monster');
-                this.player.killedMonsters++;
+            if (!m.isDespawning) {
+                if (this.player && Math.hypot(m.x - this.player.x, m.y - this.player.y) < 1000) {
+                    this.hud.addKillFeed('Monster');
+                    this.player.killedMonsters++;
+                }
+                this.spawnSystem.spawnXpOrbs(m, this.xpOrbs, this.player ? this.player.level : 1);
             }
-            this.spawnSystem.spawnXpOrbs(m, this.xpOrbs, this.player ? this.player.level : 1);
             m.destroy();
         });
         this.monsters = this.monsters.filter(m => m.hp > 0);
@@ -291,7 +293,7 @@ export class Game {
         });
         this.bots = this.bots.filter(b => b.hp > 0);
     }
-    
+        
     applyUpgrade(card) {
         this.upgradeSystem.applyUpgrade(card, this.player, this.weaponSystem);
         this.pendingUpgrades--;

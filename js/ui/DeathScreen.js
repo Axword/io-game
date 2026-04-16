@@ -40,7 +40,7 @@ export class DeathScreen {
         if (!this.respawnBtn) {
             this.respawnBtn = document.createElement('button');
             this.respawnBtn.className = 'btn btn-success';
-            this.respawnBtn.textContent = 'WZNOWIĆ GRĘ';
+            this.respawnBtn.textContent = 'WZNÓW GRĘ';
             this.respawnBtn.addEventListener('click', () => {
                 if (this.onRespawn) this.onRespawn();
             });
@@ -82,7 +82,7 @@ export class DeathScreen {
         
         let newBtn = document.createElement('button');
         newBtn.className = 'btn btn-success';
-        newBtn.textContent = 'WZNOWIĆ GRĘ';
+        newBtn.textContent = 'WZNÓW GRĘ';
         newBtn.classList.add('perm-btn-continue');
         this.permScreen.appendChild(newBtn);
         

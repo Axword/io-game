@@ -149,6 +149,7 @@ class ArenaIO {
     
     onRespawnInRoom() {
         this.deathScreen.hide();
+        this.deathScreen.hidePermScreen();
         this.game.respawnPlayer();
     }
     
