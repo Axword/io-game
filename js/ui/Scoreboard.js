@@ -7,7 +7,6 @@ export class Scoreboard {
     update(player, bots) {
         if (!player) return;
         
-        // Zbierz wszystkich graczy
         this.players = [
             {
                 name: 'TY',

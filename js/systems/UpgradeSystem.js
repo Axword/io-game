@@ -51,7 +51,7 @@ export class UpgradeSystem {
         const availNewWeapons = ALL_WEAPONS.filter(t => !ownedWeaponTypes.includes(t));
         const availNewBooks = ALL_BOOKS.filter(t => !ownedBookTypes.includes(t));
         
-        // 25% szans na nową broń
+        // Jednakowe 25% szanse na nową broń i nową księgę
         if (emptyWeaponSlot > -1 && availNewWeapons.length > 0 && Math.random() < 0.25) {
             const wt = availNewWeapons[Math.floor(Math.random() * availNewWeapons.length)];
             const wd = WEAPONS[wt];
@@ -68,8 +68,8 @@ export class UpgradeSystem {
             });
         }
         
-        // 15% szans na nową księgę
-        if (emptyBookSlot > -1 && availNewBooks.length > 0 && Math.random() < 0.15) {
+        // Takie same 25% dla nowej księgi
+        if (emptyBookSlot > -1 && availNewBooks.length > 0 && Math.random() < 0.25) {
             const bt = availNewBooks[Math.floor(Math.random() * availNewBooks.length)];
             const bd = BOOKS[bt];
             cards.push({
@@ -84,6 +84,7 @@ export class UpgradeSystem {
                 upgradeId: 'newBook_' + bt
             });
         }
+        
         
         // Zbierz wszystkie możliwe upgrady broni
         const possibleUpgrades = [];

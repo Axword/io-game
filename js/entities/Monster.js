@@ -15,7 +15,7 @@ export class Monster extends Entity {
         this.hitTimer = 0;
         this.shootTimer = rng(2, 4);
         this.currentTarget = null;
-        this.outsideZoneTimer = 0;
+        this.outsideZoneTimer = 0;  
         this.despawnTimer = 0;
         this.state = 'attacking';
         this.retreatTarget = null;
@@ -334,19 +334,10 @@ export class Monster extends Entity {
         const dy = this.retreatTarget.y - this.y;
         const distToRetreat = Math.hypot(dx, dy);
         
-        if (distToRetreat < 100) {
-            // Dotarł do punktu – despawnuj
+        if (distToRetreat < 80) {
             this.state = 'despawning';
             this.despawnTimer = 0;
             this.isDespawning = true;
-            console.log('[Monster] start despawning', {
-                id: this.id,
-                zoneIdx: this.zoneIdx,
-                x: this.x,
-                y: this.y,
-                hp: this.hp,
-                state: this.state
-            });
             return;
         }
         
@@ -360,9 +351,7 @@ export class Monster extends Entity {
         this.y = clamped.y;
     }
 
-    // ═══════════════════════════════════════════════════════
-    //  NAPRAWIONY: flaga isDespawning PRZED ustawieniem hp
-    // ═══════════════════════════════════════════════════════
+
     handleDespawning(dt, targets, bullets, scene) {
         const nearbyPlayer = this.checkForNearbyPlayers(targets);
         if (nearbyPlayer) {
@@ -376,7 +365,6 @@ export class Monster extends Entity {
         
         this.despawnTimer += dt;
         
-        // Utrzymuj pozycję w strefie nawet podczas despawnu
         if (!this.isInMyZone(this.x, this.y)) {
             const clamped = this.clampToMyZone(this.x, this.y);
             this.x = clamped.x;
@@ -384,18 +372,8 @@ export class Monster extends Entity {
         }
         
         if (this.despawnTimer > MONSTER_CONFIG.despawn.timeout) {
-            // WAŻNE: flaga PRZED zmianą hp
             this.isDespawning = true;
-            this.hp = -1; // Zabij - cleanupDead sprawdzi isDespawning
-            console.log('[Monster] despawn complete', {
-                id: this.id,
-                zoneIdx: this.zoneIdx,
-                state: this.state,
-                isDespawning: this.isDespawning,
-                hp: this.hp,
-                x: this.x,
-                y: this.y
-            });
+            this.hp = -1;
         }
     }
 

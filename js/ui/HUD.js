@@ -59,6 +59,7 @@ export class HUD {
         }
         
         this.updateWeaponSlots(player);
+        this.updateBookSlots(player);
     }
 
     updateWeaponSlots(player) {
@@ -84,6 +85,84 @@ export class HUD {
                 el.classList.remove('active');
             }
         }
+    }
+
+updateBookSlots(player) {
+    if (!player.books) return;
+    
+    const BOOKS = window.BOOKS || {};
+    
+    for (let i = 0; i < 5; i++) {
+        const el = document.getElementById('bs' + i);
+        if (!el) continue;
+        
+        const book = player.books[i];
+        
+        if (book && BOOKS[book.type]) {
+            const wi = el.querySelector('.wi');
+            const wn = el.querySelector('.wn');
+            const bookData = BOOKS[book.type];
+            
+            if (wi) wi.textContent = bookData.icon;
+            if (wn) wn.textContent = bookData.name;
+            
+            // Pokaż poziom księgi
+            const level = book.level || 1;
+            if (level > 1) {
+                el.setAttribute('data-level', level);
+                el.classList.add('active');
+            } else {
+                el.setAttribute('data-level', '1');
+                el.classList.remove('active');
+            }
+            
+            // Tooltip z efektami księgi
+            el.title = this.getBookTooltip(book, bookData, player);
+            
+        } else {
+            const wi = el.querySelector('.wi');
+            const wn = el.querySelector('.wn');
+            if (wi) wi.textContent = '—';
+            if (wn) wn.textContent = '';
+            el.removeAttribute('data-level');
+            el.classList.remove('active');
+            el.title = '';
+        }
+    }
+}
+    getBookTooltip(book, bookData, player) {
+        const level = book.level || 1;
+        const stats = book.stats || {};
+        
+        let tooltip = `${bookData.name} (Poziom ${level})\n${bookData.desc}\n\n`;
+        
+        // Dodaj konkretne wartości statystyk
+        if (bookData.type === 'vitality') {
+            tooltip += `❤️ +${Math.round(stats.maxHp || 0)} Max HP`;
+        } else if (bookData.type === 'armor') {
+            tooltip += `🛡️ +${Math.round(stats.armor || 0)} Pancerz\n`;
+            const reduction = Math.min(75, (stats.armor || 0) / 100 * 100);
+            tooltip += `(-${reduction.toFixed(1)}% obrażeń)`;
+        } else if (bookData.type === 'regeneration') {
+            tooltip += `💚 +${(stats.regen || 0).toFixed(1)} HP/s`;
+        } else if (bookData.type === 'speed') {
+            tooltip += `💨 +${((stats.moveSpeed || 0) * 100).toFixed(0)}% Prędkości`;
+        } else if (bookData.type === 'luck') {
+            tooltip += `🍀 +${Math.round(stats.luck || 0)} Szczęście`;
+        } else if (bookData.type === 'magnet') {
+            tooltip += `🧲 +${Math.round(stats.magnetRange || 0)} Zasięg XP`;
+        } else if (bookData.type === 'cooldown') {
+            tooltip += `⏰ -${(stats.cooldownReduction || 0).toFixed(0)}% Cooldown`;
+        } else if (bookData.type === 'area') {
+            tooltip += `💫 +${(stats.areaBonus || 0).toFixed(0)}% Obszar`;
+        } else if (bookData.type === 'critical') {
+            tooltip += `🎯 +${(stats.critChance || 0).toFixed(0)}% Szansa na Kryt\n`;
+            tooltip += `💥 +${Math.round(stats.critDamage || 0)}% Obrażenia Kryt`;
+        } else if (bookData.type === 'revival') {
+            tooltip += `👼 +${Math.round(stats.revives || 0)} Dodatkowe życia`;
+        }
+        
+        return tooltip;
     }
 
     // ============================================================

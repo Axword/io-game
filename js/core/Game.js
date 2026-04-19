@@ -258,14 +258,6 @@ updateCollisions(dt) {
 cleanupDead() {
     this.monsters.filter(m => m.hp <= 0).forEach(m => {
         const spawnXp = m.state !== 'despawning' && !m.isDespawning;
-        console.log('[cleanupDead] monster', {
-            id: m.id,
-            state: m.state,
-            isDespawning: m.isDespawning,
-            hp: m.hp,
-            spawnXp
-        });
-
         if (spawnXp) {
             this.spawnSystem.spawnXpOrbs(m, this.xpOrbs, this.player ? this.player.level : 1);
             if (this.player && Math.hypot(m.x - this.player.x, m.y - this.player.y) < 1000) {
