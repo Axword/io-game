@@ -173,7 +173,7 @@ export class Game {
         }
         
         this.hud.update(this.player, ZONES);
-        this.hud.updateMinimap(this.player, this.monsters, this.bots, 0);
+        this.hud.updateMinimap(this.player, this.monsters, this.bots, 0, this.bosses);
         this.scoreboard.update(this.player, this.bots);
         
         return null;
@@ -242,57 +242,72 @@ export class Game {
         }
     }
     
-    updateCollisions(dt) {
-        this.collisionSystem.checkBulletCollisions(this.bullets, this.monsters, this.player, this.bots, this.bosses);
-        this.collisionSystem.checkMonsterPlayerCollisions(this.monsters, this.player, dt);
-        this.collisionSystem.checkMonsterBotCollisions(this.monsters, this.bots, dt);
-        this.collisionSystem.checkBossPlayerCollisions(this.bosses, this.player, dt);
-        this.collisionSystem.checkBossBotCollisions(this.bosses, this.bots, dt);
-        
-        const pvpResult = this.collisionSystem.checkPlayerBotCollisions(this.player, this.bots);
-        if (pvpResult) this.hud.addKillFeed(`Zabiłeś ${pvpResult.killed.name}!`);
+updateCollisions(dt) {
+    this.collisionSystem.checkBulletCollisions(this.bullets, this.monsters, this.player, this.bots, this.bosses);
+    this.collisionSystem.checkMonsterPlayerCollisions(this.monsters, this.player, dt);
+    this.collisionSystem.checkMonsterBotCollisions(this.monsters, this.bots, dt);
+    this.collisionSystem.checkBossPlayerCollisions(this.bosses, this.player, dt);
+    this.collisionSystem.checkBossBotCollisions(this.bosses, this.bots, dt);
+    const pvpResult = this.collisionSystem.checkPlayerBotCollisions(this.player, this.bots);
+    if (pvpResult) {
+        const killedName = pvpResult.killed.name || 'Bot';
+        this.hud.addKillFeed(`⚔️ Zabiłeś ${killedName}!`);
     }
+}
     
-    cleanupDead() {
-        this.monsters.filter(m => m.hp <= 0).forEach(m => {
-            if (!m.isDespawning) {
-                if (this.player && Math.hypot(m.x - this.player.x, m.y - this.player.y) < 1000) {
-                    this.hud.addKillFeed('Monster');
-                    this.player.killedMonsters++;
-                }
-                this.spawnSystem.spawnXpOrbs(m, this.xpOrbs, this.player ? this.player.level : 1);
+cleanupDead() {
+    this.monsters.filter(m => m.hp <= 0).forEach(m => {
+        const spawnXp = m.state !== 'despawning' && !m.isDespawning;
+        console.log('[cleanupDead] monster', {
+            id: m.id,
+            state: m.state,
+            isDespawning: m.isDespawning,
+            hp: m.hp,
+            spawnXp
+        });
+
+        if (spawnXp) {
+            this.spawnSystem.spawnXpOrbs(m, this.xpOrbs, this.player ? this.player.level : 1);
+            if (this.player && Math.hypot(m.x - this.player.x, m.y - this.player.y) < 1000) {
+                this.player.killedMonsters++;
             }
-            m.destroy();
-        });
-        this.monsters = this.monsters.filter(m => m.hp > 0);
+        }
+        m.destroy();
+    });
+    this.monsters = this.monsters.filter(m => m.hp > 0);
+    this.bosses.filter(b => b.hp <= 0).forEach(b => {
+        this.hud.addKillFeed(`💀 ${b.bossData.emoji} ${b.bossData.name} POKONANY!`);
+        this.spawnSystem.spawnXpOrbs(b, this.xpOrbs, this.player ? this.player.level : 1);
+        b.destroy();
+    });
+    this.bosses = this.bosses.filter(b => b.hp > 0);
+    this.bullets.filter(b => b.life <= 0).forEach(b => b.destroy());
+    this.bullets = this.bullets.filter(b => b.life > 0);
+    this.xpOrbs.filter(o => o.life <= 0).forEach(o => o.destroy());
+    this.xpOrbs = this.xpOrbs.filter(o => o.life > 0);
+    this.fxList = this.fxList.filter(f => f.life > 0);
+    this.bots.filter(b => b.hp <= 0).forEach(b => {
+        const botName = b.name || 'Bot';
+        this.hud.addKillFeed(`💀 ${botName} został pokonany!`);
+        b.destroy();
         
-        this.bosses.filter(b => b.hp <= 0).forEach(b => {
-            this.hud.addKillFeed(`💀 ${b.bossData.emoji} ${b.bossData.name} POKONANY!`);
-            this.spawnSystem.spawnXpOrbs(b, this.xpOrbs, this.player ? this.player.level : 1);
-            b.destroy();
-        });
-        this.bosses = this.bosses.filter(b => b.hp > 0);
-        
-        this.bullets.filter(b => b.life <= 0).forEach(b => b.destroy());
-        this.bullets = this.bullets.filter(b => b.life > 0);
-        
-        this.xpOrbs.filter(o => o.life <= 0).forEach(o => o.destroy());
-        this.xpOrbs = this.xpOrbs.filter(o => o.life > 0);
-        
-        this.fxList = this.fxList.filter(f => f.life > 0);
-        
-        this.bots.filter(b => b.hp <= 0).forEach(b => {
-            b.destroy();
-            setTimeout(() => {
-                if (this.state === 'playing' || this.state === 'upgrade') {
-                    const spawnPoint = SPAWN_POINTS[Math.floor(Math.random() * SPAWN_POINTS.length)];
-                    this.bots.push(new Player(['warrior', 'archer', 'mage', 'berserker'][Math.floor(Math.random() * 4)], 
-                        { speed: 0, hp: 0, luck: 0 }, this.scene, true, spawnPoint.x, spawnPoint.y));
-                }
-            }, 10000);
-        });
-        this.bots = this.bots.filter(b => b.hp > 0);
-    }
+        setTimeout(() => {
+            if (this.state === 'playing' || this.state === 'upgrade') {
+                const spawnPoint = SPAWN_POINTS[Math.floor(Math.random() * SPAWN_POINTS.length)];
+                const newBot = new Player(
+                    ['warrior', 'archer', 'mage', 'berserker'][Math.floor(Math.random() * 4)], 
+                    { speed: 0, hp: 0, luck: 0 }, 
+                    this.scene, 
+                    true, 
+                    spawnPoint.x, 
+                    spawnPoint.y
+                );
+                this.bots.push(newBot);
+            }
+        }, 10000);
+    });
+    this.bots = this.bots.filter(b => b.hp > 0);
+}
         
     applyUpgrade(card) {
         this.upgradeSystem.applyUpgrade(card, this.player, this.weaponSystem);

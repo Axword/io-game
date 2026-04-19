@@ -57,5 +57,3 @@ export class Room {
         return `${minutes}m ${secs}s`;
     }
 }
-
-

@@ -19,6 +19,10 @@ export class Boss extends Monster {
         this.baseColor = bossData.col;
         this.abilities = bossData.abilities;
         
+        // Boss nigdy się nie despawnuje
+        this.state = 'attacking';
+        this.isDespawning = false;
+        
         this.createMesh(bossData.shape, this.sz, this.baseColor, false);
         this.createBossVisuals();
         
@@ -69,19 +73,42 @@ export class Boss extends Monster {
         return sprite;
     }
     
+    // Nadpisz update aby boss zawsze atakował
     update(dt, targets, safeRadius, bullets, scene) {
-        super.update(dt, targets, safeRadius, bullets, scene);
+        // Upewnij się że targets to tablica
+        if (!Array.isArray(targets)) {
+            targets = [targets].filter(t => t);
+        }
         
+        // Boss zawsze w stanie attacking
+        this.state = 'attacking';
+        
+        // Aktualizuj target
+        if (!this.currentTarget || this.currentTarget.hp <= 0) {
+            const nearest = this.findNearestTarget(targets);
+            this.currentTarget = nearest.target;
+        }
+        
+        // Gonimy i atakujemy
+        if (this.currentTarget) {
+            this.chaseAndAttack(dt, bullets, scene);
+        }
+        
+        // Cooldowny
         if (this.teleportCooldown > 0) this.teleportCooldown -= dt;
         
+        // Shield
         this.updateShieldState(dt);
         
+        // Abilities
         this.abilityTimer -= dt;
         if (this.abilityTimer <= 0 && this.currentTarget) {
             this.abilityTimer = rng(3, 6);
             this.useAbility(this.currentTarget, targets, bullets, scene);
         }
         
+        // Wizualizacje
+        this.updateVisuals(dt);
         this.updateBossVisuals(dt);
         this.updateAbilityEffects(dt);
     }
@@ -134,7 +161,7 @@ export class Boss extends Monster {
     }
     
     useLaser(allTargets, bullets, scene) {
-        const sorted = allTargets.filter(t => t.hp > 0)
+        const sorted = allTargets.filter(t => t && t.hp > 0)
             .sort((a, b) => Math.hypot(a.x - this.x, a.y - this.y) - Math.hypot(b.x - this.x, b.y - this.y));
         
         for (let i = 0; i < Math.min(3, sorted.length); i++) {
@@ -253,6 +280,24 @@ export class Boss extends Monster {
         }
     }
     
+    createCircle(radius, color, opacity, z) {
+        const geo = new THREE.CircleGeometry(radius, 32);
+        const mat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity });
+        const mesh = new THREE.Mesh(geo, mat);
+        mesh.position.z = z;
+        this.scene.add(mesh);
+        return mesh;
+    }
+    
+    createRing(innerRadius, outerRadius, color, opacity, z) {
+        const geo = new THREE.RingGeometry(innerRadius, outerRadius, 32);
+        const mat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity, side: THREE.DoubleSide });
+        const mesh = new THREE.Mesh(geo, mat);
+        mesh.position.z = z;
+        this.scene.add(mesh);
+        return mesh;
+    }
+    
     updateAbilityEffects(dt) {
         for (let i = this.abilityEffects.length - 1; i >= 0; i--) {
             const effect = this.abilityEffects[i];
@@ -280,8 +325,11 @@ export class Boss extends Monster {
     }
     
     takeDamage(amount) {
-        super.takeDamage(this.shieldActive ? amount * 0.3 : amount);
+        const actualDamage = this.shieldActive ? amount * 0.3 : amount;
+        this.hp -= actualDamage;
         this.hitTimer = 0.15;
+        this.state = 'attacking';
+        this.isDespawning = false;
     }
     
     destroy() {

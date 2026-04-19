@@ -3,6 +3,7 @@ import { Entity } from './Entity.js';
 import { mkShape } from '../utils/geometry.js';
 import { CLASSES } from '../config/classes.js';
 import { WEAPONS } from '../config/weapons.js';
+import { BOOKS } from '../config/books.js';
 import { MOVEMENT_MULTIPLIER } from '../config/constants.js';
 import { BotAI } from './BotAI.js';
 
@@ -26,6 +27,18 @@ export class Player extends Entity {
         this.totalXp = 0;
         
         this.weapons = [this.makeWeaponInstance(cd.weapon), null, null, null];
+        this.books = [null, null, null, null, null]; // 5 slotów na księgi
+        
+        // Statystyki z książek
+        this.armor = 0;
+        this.regen = 0;
+        this.magnetRange = 100;
+        this.cooldownReduction = 0;
+        this.areaBonus = 0;
+        this.critChance = 0;
+        this.critDamage = 150;
+        this.revives = 0;
+        this.regenTimer = 0;
         
         const size = isBot ? 20 : 22;
         const z = isBot ? 2.8 : 3;
@@ -61,6 +74,15 @@ export class Player extends Entity {
         };
     }
     
+    makeBookInstance(type) {
+        return {
+            type,
+            level: 1,
+            appliedUpgrades: new Set(),
+            stats: { ...BOOKS[type].stats }
+        };
+    }
+    
     update(dt, input, safeRadius, monsters, xpOrbs, upgradeSystem, weaponSystem) {
         if (this.isBot) {
             this.updateBot(dt, monsters, xpOrbs, upgradeSystem, weaponSystem);
@@ -68,15 +90,36 @@ export class Player extends Entity {
             this.updatePlayer(dt, input);
         }
         
+        // Regeneracja
+        if (this.regen > 0) {
+            this.regenTimer += dt;
+            if (this.regenTimer >= 1) {
+                this.hp = Math.min(this.maxHp, this.hp + this.regen);
+                this.regenTimer = 0;
+            }
+        }
+        
         if (this.invTimer > 0) this.invTimer -= dt;
         
         if (this.damageAccumulator > 0) {
-            this.hp -= this.damageAccumulator;
+            let damage = this.damageAccumulator;
+            
+            // Zastosuj pancerz
+            if (this.armor > 0) {
+                const reduction = Math.min(0.75, this.armor / 100); // Max 75% redukcji
+                damage *= (1 - reduction);
+            }
+            
+            this.hp -= damage;
             this.damageAccumulator = 0;
         }
         
         for (const w of this.weapons) {
-            if (w && w.timer > 0) w.timer -= dt;
+            if (w && w.timer > 0) {
+                // Zastosuj redukcję cooldownu
+                const cdMultiplier = 1 - Math.min(0.8, this.cooldownReduction / 100);
+                w.timer -= dt * (1 / cdMultiplier);
+            }
         }
     }
     
@@ -114,8 +157,9 @@ export class Player extends Entity {
         this.updatePosition(2.8, 2.7);
         this.mesh.rotation.z += dt * 1.2;
         
+        const magnetRange = this.magnetRange || 25;
         for (const orb of xpOrbs) {
-            if (Math.hypot(orb.x - this.x, orb.y - this.y) < 25) {
+            if (Math.hypot(orb.x - this.x, orb.y - this.y) < magnetRange) {
                 this.addXp(orb.val);
                 orb.life = -1;
             }

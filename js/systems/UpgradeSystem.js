@@ -1,6 +1,7 @@
 import { WEAPONS, ALL_WEAPONS } from '../config/weapons.js';
-import { RARITIES } from '../config/constants.js';
+import { BOOKS, ALL_BOOKS } from '../config/books.js';
 import { UPGRADE_TYPES } from '../config/upgrades.js';
+import { RARITIES } from '../config/constants.js';
 import { rng, rngInt } from '../utils/math.js';
 
 export class UpgradeSystem {
@@ -41,13 +42,18 @@ export class UpgradeSystem {
     
     generateUpgradeCards(player) {
         const cards = [];
-        const emptySlot = player.weapons.findIndex(w => w === null);
-        const ownedTypes = player.weapons.filter(w => w).map(w => w.type);
-        const availNew = ALL_WEAPONS.filter(t => !ownedTypes.includes(t));
+        const emptyWeaponSlot = player.weapons.findIndex(w => w === null);
+        const emptyBookSlot = player.books ? player.books.findIndex(b => b === null) : -1;
+        
+        const ownedWeaponTypes = player.weapons.filter(w => w).map(w => w.type);
+        const ownedBookTypes = player.books ? player.books.filter(b => b).map(b => b.type) : [];
+        
+        const availNewWeapons = ALL_WEAPONS.filter(t => !ownedWeaponTypes.includes(t));
+        const availNewBooks = ALL_BOOKS.filter(t => !ownedBookTypes.includes(t));
         
         // 25% szans na nową broń
-        if (emptySlot > -1 && availNew.length > 0 && Math.random() < 0.25) {
-            const wt = availNew[Math.floor(Math.random() * availNew.length)];
+        if (emptyWeaponSlot > -1 && availNewWeapons.length > 0 && Math.random() < 0.25) {
+            const wt = availNewWeapons[Math.floor(Math.random() * availNewWeapons.length)];
             const wd = WEAPONS[wt];
             cards.push({
                 type: 'newWeapon',
@@ -62,7 +68,24 @@ export class UpgradeSystem {
             });
         }
         
-        // Zbierz wszystkie możliwe upgrady
+        // 15% szans na nową księgę
+        if (emptyBookSlot > -1 && availNewBooks.length > 0 && Math.random() < 0.15) {
+            const bt = availNewBooks[Math.floor(Math.random() * availNewBooks.length)];
+            const bd = BOOKS[bt];
+            cards.push({
+                type: 'newBook',
+                bookType: bt,
+                name: 'NOWA KSIĘGA: ' + bd.name,
+                icon: bd.icon,
+                desc: bd.desc,
+                wname: 'Nowa księga',
+                rarId: 2,
+                val: '',
+                upgradeId: 'newBook_' + bt
+            });
+        }
+        
+        // Zbierz wszystkie możliwe upgrady broni
         const possibleUpgrades = [];
         
         for (const weapon of player.weapons) {
@@ -83,12 +106,43 @@ export class UpgradeSystem {
                 }
                 
                 possibleUpgrades.push({
-                    weapon,
-                    weaponType: weapon.type,
+                    itemType: 'weapon',
+                    item: weapon,
+                    itemTypeId: weapon.type,
                     upgradeId,
                     upgradeType,
                     upgradeKey
                 });
+            }
+        }
+        
+        // Zbierz wszystkie możliwe upgrady książek
+        if (player.books) {
+            for (const book of player.books) {
+                if (!book) continue;
+                
+                const bd = BOOKS[book.type];
+                const allowedUpgrades = bd.allowedUpgrades || [];
+                
+                for (const upgradeId of allowedUpgrades) {
+                    const upgradeType = UPGRADE_TYPES[upgradeId];
+                    if (!upgradeType) continue;
+                    
+                    const upgradeKey = book.type + '_' + upgradeId;
+                    
+                    if (book.appliedUpgrades && book.appliedUpgrades.has(upgradeKey)) {
+                        continue;
+                    }
+                    
+                    possibleUpgrades.push({
+                        itemType: 'book',
+                        item: book,
+                        itemTypeId: book.type,
+                        upgradeId,
+                        upgradeType,
+                        upgradeKey
+                    });
+                }
             }
         }
         
@@ -98,6 +152,7 @@ export class UpgradeSystem {
         if (possibleUpgrades.length === 0) {
             // Fallback - jeśli brak upgradów, pozwól na duplikaty z mniejszym bonusem
             console.warn('No upgrades available, using fallback');
+            
             for (const weapon of player.weapons) {
                 if (!weapon) continue;
                 const wd = WEAPONS[weapon.type];
@@ -108,8 +163,9 @@ export class UpgradeSystem {
                     if (!upgradeType) continue;
                     
                     possibleUpgrades.push({
-                        weapon,
-                        weaponType: weapon.type,
+                        itemType: 'weapon',
+                        item: weapon,
+                        itemTypeId: weapon.type,
                         upgradeId,
                         upgradeType,
                         upgradeKey: weapon.type + '_' + upgradeId + '_dup',
@@ -123,8 +179,8 @@ export class UpgradeSystem {
         const shuffled = possibleUpgrades.sort(() => Math.random() - 0.5);
         const selected = shuffled.slice(0, targetCards - cards.length);
         
-        for (const item of selected) {
-            const { weapon, weaponType, upgradeId, upgradeType, upgradeKey, isDuplicate } = item;
+        for (const upgrade of selected) {
+            const { itemType, item, itemTypeId, upgradeId, upgradeType, upgradeKey, isDuplicate } = upgrade;
             
             const rarId = this.rollRarity();
             let value = this.getRarityValue(upgradeType, rarId);
@@ -139,15 +195,18 @@ export class UpgradeSystem {
                 `+${Math.round(value)}` : 
                 `+${Math.round(value)}%`;
             
+            const itemData = itemType === 'weapon' ? WEAPONS[itemTypeId] : BOOKS[itemTypeId];
+            
             cards.push({
-                type: 'upgrade',
-                weaponType,
-                weaponRef: weapon,
+                type: itemType === 'weapon' ? 'weaponUpgrade' : 'bookUpgrade',
+                itemType,
+                itemTypeId,
+                itemRef: item,
                 upgradeId,
                 upgradeType,
                 name: upgradeType.name,
                 icon: upgradeType.icon,
-                wname: WEAPONS[weaponType].name,
+                wname: itemData.name,
                 desc,
                 value,
                 rarId,
@@ -168,9 +227,10 @@ export class UpgradeSystem {
             const value = this.getRarityValue(upgradeType, rarId) * 0.3;
             
             cards.push({
-                type: 'upgrade',
-                weaponType: weapon.type,
-                weaponRef: weapon,
+                type: 'weaponUpgrade',
+                itemType: 'weapon',
+                itemTypeId: weapon.type,
+                itemRef: weapon,
                 upgradeId,
                 upgradeType,
                 name: upgradeType.name + ' (Bonus)',
@@ -197,8 +257,17 @@ export class UpgradeSystem {
                     weaponSystem.setupAura(player);
                 }
             }
-        } else if (card.type === 'upgrade') {
-            const weapon = card.weaponRef;
+        } else if (card.type === 'newBook') {
+            if (!player.books) {
+                player.books = [null, null, null, null, null];
+            }
+            const slot = player.books.findIndex(b => b === null);
+            if (slot > -1) {
+                player.books[slot] = player.makeBookInstance(card.bookType);
+                this.applyBookStats(player, card.bookType);
+            }
+        } else if (card.type === 'weaponUpgrade') {
+            const weapon = card.itemRef;
             
             if (!weapon.appliedUpgrades) {
                 weapon.appliedUpgrades = new Set();
@@ -209,7 +278,7 @@ export class UpgradeSystem {
                 weapon.appliedUpgrades.add(card.upgradeKey);
             }
             
-            const statName = this.getStatName(card.upgradeId, card.weaponType);
+            const statName = this.getStatName(card.upgradeId, card.itemTypeId);
             
             if (card.upgradeType.isAdditive) {
                 const current = weapon.upgrades[statName] || 0;
@@ -218,6 +287,59 @@ export class UpgradeSystem {
                 const current = weapon.upgrades[statName] || 1;
                 weapon.upgrades[statName] = current * (1 + card.value / 100);
             }
+        } else if (card.type === 'bookUpgrade') {
+            const book = card.itemRef;
+            
+            if (!book.appliedUpgrades) {
+                book.appliedUpgrades = new Set();
+            }
+            
+            if (!card.isDuplicate) {
+                book.appliedUpgrades.add(card.upgradeKey);
+            }
+            
+            // Ulepsz statystyki księgi
+            book.level = (book.level || 1) + 1;
+            
+            for (const key in book.stats) {
+                if (typeof book.stats[key] === 'number') {
+                    book.stats[key] *= (1 + card.value / 100);
+                }
+            }
+            
+            this.applyBookStats(player, card.itemTypeId);
+        }
+    }
+    
+    applyBookStats(player, bookType) {
+        const book = player.books.find(b => b && b.type === bookType);
+        if (!book) return;
+        
+        const bd = BOOKS[bookType];
+        
+        // Zastosuj efekty księgi
+        if (bookType === 'vitality') {
+            player.maxHp += book.stats.maxHp;
+            player.hp = Math.min(player.maxHp, player.hp + book.stats.maxHp);
+        } else if (bookType === 'armor') {
+            player.armor = (player.armor || 0) + book.stats.armor;
+        } else if (bookType === 'regeneration') {
+            player.regen = (player.regen || 0) + book.stats.regen;
+        } else if (bookType === 'speed') {
+            player.speed *= (1 + book.stats.moveSpeed);
+        } else if (bookType === 'luck') {
+            this.permStats.luck = (this.permStats.luck || 0) + book.stats.luck;
+        } else if (bookType === 'magnet') {
+            player.magnetRange = (player.magnetRange || 100) + book.stats.magnetRange;
+        } else if (bookType === 'cooldown') {
+            player.cooldownReduction = (player.cooldownReduction || 0) + book.stats.cooldownReduction;
+        } else if (bookType === 'area') {
+            player.areaBonus = (player.areaBonus || 0) + book.stats.areaBonus;
+        } else if (bookType === 'critical') {
+            player.critChance = (player.critChance || 0) + book.stats.critChance;
+            player.critDamage = (player.critDamage || 150) + book.stats.critDamage;
+        } else if (bookType === 'revival') {
+            player.revives = (player.revives || 0) + book.stats.revives;
         }
     }
     
@@ -232,7 +354,8 @@ export class UpgradeSystem {
             'range': 'range',
             'bounce': 'bBnc',
             'chain': 'chain',
-            'duration': 'duration'
+            'duration': 'duration',
+            'explosion': 'explosion'
         };
         
         return mapping[upgradeId] || upgradeId;

@@ -237,6 +237,15 @@ export class SpawnSystem {
     spawnXpOrbs(entity, xpOrbs) {
         const count = rngInt(2, 4);
         const xpPerOrb = entity.xp / count;
+        console.log('[spawnXpOrbs]', {
+            id: entity.id || '(no-id)',
+            hp: entity.hp,
+            xp: entity.xp,
+            count,
+            isBoss: entity.isBoss,
+            state: entity.state,
+            isDespawning: entity.isDespawning
+        });
         
         for (let i = 0; i < count; i++) {
             const orb = new XpOrb(

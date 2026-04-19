@@ -79,10 +79,10 @@ export const UPGRADE_TYPES = {
         icon: '📡',
         desc: 'Zwiększa zasięg o +X%',
         ranges: {
-            common: [8, 12],      // Zmniejszone z 12-20
-            enhanced: [12, 18],   // Zmniejszone z 20-35
-            rare: [18, 28],       // Zmniejszone z 35-55
-            legendary: [28, 40]   // Zmniejszone z 55-80
+            common: [8, 12],
+            enhanced: [12, 18],
+            rare: [18, 28],
+            legendary: [28, 40]
         }
     },
     bounce: {
@@ -121,6 +121,30 @@ export const UPGRADE_TYPES = {
             enhanced: [25, 40],
             rare: [40, 60],
             legendary: [60, 90]
+        }
+    },
+    explosion: {
+        id: 'explosion',
+        name: 'Eksplozja',
+        icon: '💣',
+        desc: 'Zwiększa zasięg wybuchu o +X%',
+        ranges: {
+            common: [20, 30],
+            enhanced: [30, 50],
+            rare: [50, 80],
+            legendary: [80, 120]
+        }
+    },
+    bookPower: {
+        id: 'bookPower',
+        name: 'Moc Księgi',
+        icon: '📖',
+        desc: 'Zwiększa efekt o +X%',
+        ranges: {
+            common: [20, 30],
+            enhanced: [30, 50],
+            rare: [50, 80],
+            legendary: [80, 120]
         }
     }
 };

@@ -8,6 +8,7 @@ import { MONSTER_CONFIG } from '../config/monsters.js';
 export class Monster extends Entity {
     constructor(x, y, zoneIdx, zones, scene, hpMult = 1.0, isBoss = false) {
         super(x, y, scene);
+        this.id = Math.random().toString(36).substring(2, 8);
         this.zoneIdx = Math.max(0, zoneIdx);
         this.zones = zones;
         this.isBoss = isBoss;
@@ -17,8 +18,8 @@ export class Monster extends Entity {
         this.outsideZoneTimer = 0;
         this.despawnTimer = 0;
         this.state = 'attacking';
-        this.retreatTarget = null; // Cel ucieczki
-        this.isDespawning = false; // Czy w trakcie despawnu
+        this.retreatTarget = null;
+        this.isDespawning = false;
 
         if (!isBoss) {
             this.initMonster(zones, hpMult);
@@ -163,38 +164,83 @@ export class Monster extends Entity {
         return getZoneIdx(target.x, target.y, this.zones) === this.zoneIdx;
     }
 
-    // Znajdź najbliższy punkt w mojej strefie daleko od wszystkich graczy
+    // ═══════════════════════════════════════════════════════
+    //  NAPRAWIONY: punkt ucieczki WEWNĄTRZ swojej strefy
+    // ═══════════════════════════════════════════════════════
     findRetreatPoint(targets) {
-        const targetDist = (this.spawnZoneMin + this.spawnZoneMax) / 2;
-        const randomAngle = Math.random() * Math.PI * 2;
+        const minR = this.spawnZoneMin || 0;
+        const maxR = this.spawnZoneMax || 6000;
+        // Cel: środek pierścienia strefy
+        const targetDist = (minR + maxR) / 2;
         
-        // Szukaj punktu w przeciwnym kierunku od najbliższego gracza
+        // Kierunek ucieczki - od najbliższego gracza
         const nearestPlayer = this.findNearestTarget(targets);
+        let angle;
+        
         if (nearestPlayer.target) {
-            const angleAwayFromPlayer = Math.atan2(
+            // Kąt od gracza do potwora (uciekamy OD gracza)
+            const angleAway = Math.atan2(
                 this.y - nearestPlayer.target.y,
                 this.x - nearestPlayer.target.x
             );
-            
-            // Dodaj trochę losowości
-            const finalAngle = angleAwayFromPlayer + (Math.random() - 0.5) * Math.PI / 2;
-            
+            // Dodaj losowość ±45°
+            angle = angleAway + (Math.random() - 0.5) * Math.PI / 2;
+        } else {
+            angle = Math.random() * Math.PI * 2;
+        }
+        
+        // Punkt docelowy NA pierścieniu strefy
+        let rx = Math.cos(angle) * targetDist;
+        let ry = Math.sin(angle) * targetDist;
+        
+        // Walidacja: upewnij się że punkt jest w strefie
+        const dist = Math.hypot(rx, ry);
+        if (dist < minR || dist > maxR) {
+            // Clampuj do strefy
+            const clampedDist = Math.max(minR + 50, Math.min(maxR - 50, dist));
+            rx = Math.cos(angle) * clampedDist;
+            ry = Math.sin(angle) * clampedDist;
+        }
+        
+        return { x: rx, y: ry };
+    }
+
+    // Sprawdź czy punkt (x,y) jest w mojej strefie
+    isInMyZone(px, py) {
+        const dist = Math.hypot(px, py);
+        const minR = this.spawnZoneMin || 0;
+        const maxR = this.spawnZoneMax || 6000;
+        return dist >= minR && dist <= maxR;
+    }
+
+    // Ogranicz pozycję do swojej strefy (clamp)
+    clampToMyZone(px, py) {
+        const dist = Math.hypot(px, py);
+        const minR = this.spawnZoneMin || 0;
+        const maxR = this.spawnZoneMax || 6000;
+        
+        if (dist < 1) {
+            // Jesteśmy w centrum, wypchnij na minR
+            const rndAngle = Math.random() * Math.PI * 2;
             return {
-                x: Math.cos(finalAngle) * targetDist,
-                y: Math.sin(finalAngle) * targetDist
+                x: Math.cos(rndAngle) * (minR + 50),
+                y: Math.sin(rndAngle) * (minR + 50)
             };
         }
         
-        // Jeśli nie ma graczy, losowy punkt w strefie
-        return {
-            x: Math.cos(randomAngle) * targetDist,
-            y: Math.sin(randomAngle) * targetDist
-        };
+        if (dist >= minR && dist <= maxR) {
+            return { x: px, y: py }; // Już w strefie
+        }
+        
+        // Clampuj odległość do pierścienia
+        const clampedDist = Math.max(minR + 10, Math.min(maxR - 10, dist));
+        const nx = px / dist;
+        const ny = py / dist;
+        return { x: nx * clampedDist, y: ny * clampedDist };
     }
 
-    // Sprawdź czy są gracze w pobliżu podczas ucieczki
     checkForNearbyPlayers(targets) {
-        const detectionRange = 800; // Zasięg wykrywania
+        const detectionRange = 1100;
         
         for (const target of targets) {
             if (target.hp <= 0) continue;
@@ -202,8 +248,7 @@ export class Monster extends Entity {
             
             if (dist < detectionRange) {
                 const targetZone = getZoneIdx(target.x, target.y, this.zones);
-                // Atakuj jeśli gracz jest w twojej strefie lub bardzo blisko
-                if (targetZone === this.zoneIdx || dist < 400) {
+                if (targetZone === this.zoneIdx || dist < 800) {
                     return target;
                 }
             }
@@ -259,8 +304,11 @@ export class Monster extends Entity {
         }
     }
 
+    // ═══════════════════════════════════════════════════════
+    //  NAPRAWIONY: ucieczka TYLKO w obrębie strefy
+    // ═══════════════════════════════════════════════════════
     handleReturning(dt, targets, bullets, scene) {
-        // Sprawdź czy są gracze w pobliżu
+        // Sprawdź czy gracze wrócili w pobliże
         const nearbyPlayer = this.checkForNearbyPlayers(targets);
         if (nearbyPlayer) {
             this.currentTarget = nearbyPlayer;
@@ -270,9 +318,16 @@ export class Monster extends Entity {
             return;
         }
         
-        // Idź do punktu ucieczki
+        // Wygeneruj cel jeśli brak
         if (!this.retreatTarget) {
             this.retreatTarget = this.findRetreatPoint(targets);
+        }
+        
+        // Walidacja: czy cel ucieczki jest w mojej strefie
+        if (!this.isInMyZone(this.retreatTarget.x, this.retreatTarget.y)) {
+            const clamped = this.clampToMyZone(this.retreatTarget.x, this.retreatTarget.y);
+            this.retreatTarget.x = clamped.x;
+            this.retreatTarget.y = clamped.y;
         }
         
         const dx = this.retreatTarget.x - this.x;
@@ -280,18 +335,35 @@ export class Monster extends Entity {
         const distToRetreat = Math.hypot(dx, dy);
         
         if (distToRetreat < 100) {
-            // Dotarłeś do punktu ucieczki, rozpocznij despawn
+            // Dotarł do punktu – despawnuj
             this.state = 'despawning';
             this.despawnTimer = 0;
             this.isDespawning = true;
+            console.log('[Monster] start despawning', {
+                id: this.id,
+                zoneIdx: this.zoneIdx,
+                x: this.x,
+                y: this.y,
+                hp: this.hp,
+                state: this.state
+            });
             return;
         }
         
-        this.moveToward(this.retreatTarget.x, this.retreatTarget.y, this.spd * 1.5, dt);
+        // Poruszaj się w stronę celu
+        const newX = this.x + (dx / distToRetreat) * this.spd * 1.5 * dt * 55;
+        const newY = this.y + (dy / distToRetreat) * this.spd * 1.5 * dt * 55;
+        
+        // Clampuj pozycję do strefy podczas ruchu
+        const clamped = this.clampToMyZone(newX, newY);
+        this.x = clamped.x;
+        this.y = clamped.y;
     }
 
+    // ═══════════════════════════════════════════════════════
+    //  NAPRAWIONY: flaga isDespawning PRZED ustawieniem hp
+    // ═══════════════════════════════════════════════════════
     handleDespawning(dt, targets, bullets, scene) {
-        // Sprawdź czy są gracze w pobliżu - jeśli tak, anuluj despawn i atakuj
         const nearbyPlayer = this.checkForNearbyPlayers(targets);
         if (nearbyPlayer) {
             this.currentTarget = nearbyPlayer;
@@ -304,10 +376,26 @@ export class Monster extends Entity {
         
         this.despawnTimer += dt;
         
-        // Usuń potwora bez dawania XP
+        // Utrzymuj pozycję w strefie nawet podczas despawnu
+        if (!this.isInMyZone(this.x, this.y)) {
+            const clamped = this.clampToMyZone(this.x, this.y);
+            this.x = clamped.x;
+            this.y = clamped.y;
+        }
+        
         if (this.despawnTimer > MONSTER_CONFIG.despawn.timeout) {
-            this.hp = -1;
-            this.isDespawning = true; // Flaga że to despawn, nie śmierć
+            // WAŻNE: flaga PRZED zmianą hp
+            this.isDespawning = true;
+            this.hp = -1; // Zabij - cleanupDead sprawdzi isDespawning
+            console.log('[Monster] despawn complete', {
+                id: this.id,
+                zoneIdx: this.zoneIdx,
+                state: this.state,
+                isDespawning: this.isDespawning,
+                hp: this.hp,
+                x: this.x,
+                y: this.y
+            });
         }
     }
 
@@ -427,7 +515,6 @@ export class Monster extends Entity {
         this.hp -= amount;
         this.hitTimer = 0.1;
         
-        // Otrzymanie obrażeń anuluje despawn i powrót
         if (this.state === 'despawning' || this.state === 'returning') {
             this.state = 'attacking';
             this.outsideZoneTimer = 0;
