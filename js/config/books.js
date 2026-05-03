@@ -4,26 +4,8 @@ export const BOOKS = {
         icon: '❤️',
         col: 0xff0000,
         type: 'book',
-        desc: 'Zwiększa maksymalne HP',
-        stats: { maxHp: 20 },
-        allowedUpgrades: ['bookPower']
-    },
-    armor: {
-        name: 'Księga Pancerza',
-        icon: '🛡️',
-        col: 0x808080,
-        type: 'book',
-        desc: 'Redukuje otrzymywane obrażenia',
-        stats: { armor: 5 },
-        allowedUpgrades: ['bookPower']
-    },
-    regeneration: {
-        name: 'Księga Regeneracji',
-        icon: '💚',
-        col: 0x00ff00,
-        type: 'book',
-        desc: 'Regeneruje HP co sekundę',
-        stats: { regen: 1 },
+        desc: 'Zwiększa maksymalne HP o 10% bazowego HP',
+        stats: { maxHp: 0.1 },
         allowedUpgrades: ['bookPower']
     },
     speed: {
@@ -31,26 +13,8 @@ export const BOOKS = {
         icon: '💨',
         col: 0x00ffff,
         type: 'book',
-        desc: 'Zwiększa prędkość ruchu',
-        stats: { moveSpeed: 0.15 },
-        allowedUpgrades: ['bookPower']
-    },
-    luck: {
-        name: 'Księga Szczęścia',
-        icon: '🍀',
-        col: 0xffff00,
-        type: 'book',
-        desc: 'Zwiększa szansę na lepsze upgrady',
-        stats: { luck: 10 },
-        allowedUpgrades: ['bookPower']
-    },
-    magnet: {
-        name: 'Księga Magnetyzmu',
-        icon: '🧲',
-        col: 0xff00ff,
-        type: 'book',
-        desc: 'Zwiększa zasięg zbierania XP',
-        stats: { magnetRange: 50 },
+        desc: 'Zwiększa prędkość ruchu o 8%',
+        stats: { moveSpeed: 0.08 },
         allowedUpgrades: ['bookPower']
     },
     cooldown: {
@@ -58,17 +22,17 @@ export const BOOKS = {
         icon: '⏰',
         col: 0x4444ff,
         type: 'book',
-        desc: 'Redukuje czas odnowienia wszystkich broni',
-        stats: { cooldownReduction: 8 },
+        desc: 'Redukuje czas odnowienia wszystkich broni o 5%',
+        stats: { cooldownReduction: 5 },
         allowedUpgrades: ['bookPower']
     },
-    area: {
-        name: 'Księga Mocy',
-        icon: '💫',
-        col: 0xff88ff,
+    magnet: {
+        name: 'Księga Magnetyzmu',
+        icon: '🧲',
+        col: 0xff00ff,
         type: 'book',
-        desc: 'Zwiększa obszar działania wszystkich broni',
-        stats: { areaBonus: 10 },
+        desc: 'Zwiększa zasięg zbierania XP o 30 jednostek',
+        stats: { magnetRange: 30 },
         allowedUpgrades: ['bookPower']
     },
     critical: {
@@ -76,8 +40,35 @@ export const BOOKS = {
         icon: '🎯',
         col: 0xffaa00,
         type: 'book',
-        desc: 'Zwiększa szansę na trafienie krytyczne',
-        stats: { critChance: 5, critDamage: 50 },
+        desc: 'Zwiększa szansę na krytyk o 3% i obrażenia krytyczne o 10%',
+        stats: { critChance: 3, critDamage: 10 },
+        allowedUpgrades: ['bookPower']
+    },
+    damage: {
+        name: 'Księga Mocy',
+        icon: '💥',
+        col: 0xff8800,
+        type: 'book',
+        desc: 'Zwiększa obrażenia wszystkich broni o 5%',
+        stats: { damageBonus: 5 },
+        allowedUpgrades: ['bookPower']
+    },
+    area: {
+        name: 'Księga Rozprzestrzeniania',
+        icon: '💫',
+        col: 0x88ff88,
+        type: 'book',
+        desc: 'Zwiększa obszar działania broni o 8%',
+        stats: { areaBonus: 8 },
+        allowedUpgrades: ['bookPower']
+    },
+    luck: {
+        name: 'Księga Szczęścia',
+        icon: '🍀',
+        col: 0xffff00,
+        type: 'book',
+        desc: 'Zwiększa szansę na lepsze upgrady o 5%',
+        stats: { luck: 5 },
         allowedUpgrades: ['bookPower']
     },
     revival: {
@@ -85,10 +76,19 @@ export const BOOKS = {
         icon: '👼',
         col: 0xffffff,
         type: 'book',
-        desc: 'Dodaje dodatkowe życie',
+        desc: 'Daje 1 dodatkowe życie',
         stats: { revives: 1 },
+        allowedUpgrades: ['bookPower']
+    },
+    regeneration: {
+        name: 'Księga Regeneracji',
+        icon: '💚',
+        col: 0x00ff88,
+        type: 'book',
+        desc: 'Regeneruje 0.5 HP na sekundę',
+        stats: { regen: 0.5 },
         allowedUpgrades: ['bookPower']
     }
 };
 
-export const ALL_BOOKS = ['vitality', 'armor', 'regeneration', 'speed', 'luck', 'magnet', 'cooldown', 'area', 'critical', 'revival'];
+export const ALL_BOOKS = Object.keys(BOOKS);

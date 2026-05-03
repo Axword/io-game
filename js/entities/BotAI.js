@@ -1,571 +1,348 @@
-// entities/BotAI.js
 
 import { rng, norm } from '../utils/math.js';
 
 /**
- * Zaawansowany system AI dla botów
- * Wykorzystuje system priorytetów, pamięć, i adaptacyjne zachowania
+ * System AI dla botów w vampire-survivor IO
+ * 
+ * Kluczowe zasady przetrwania:
+ * 1. Nie wchodź w strefę za trudną na twój poziom
+ * 2. Uciekaj ZANIM HP spadnie za nisko
+ * 3. Zbieraj XP agresywnie - poziom = siła
+ * 4. Walcz tylko gdy to opłacalne
+ * 5. Zawsze się ruszaj - stanie = śmierć
  */
 export class BotAI {
     constructor(bot) {
         this.bot = bot;
-        
-        // Stan główny
-        this.state = 'exploring';
-        this.subState = null;
+
+        // ─── Stan ────────────────────────────────────────────
+        this.state = 'explore';
         this.stateTimer = 0;
         this.decisionTimer = 0;
-        
-        // Pamięć bota
-        this.memory = {
-            lastDamageTime: 0,
-            lastDamageSource: null,
-            dangerousAreas: [], // [{x, y, radius, expireTime}]
-            visitedAreas: [],   // [{x, y, time}]
-            knownXpClusters: [], // [{x, y, totalValue, orbCount}]
-            recentKills: 0,
-            deathCount: 0,
-            lastPosition: { x: 0, y: 0 },
-            stuckTimer: 0,
+        this.decisionInterval = 0.15; // Co ile sekund podejmujemy decyzję
+
+        // ─── Osobowość (różnicuje boty) ──────────────────────
+        this.personality = {
+            aggression:     rng(0.3, 1.0),
+            caution:        rng(0.3, 1.0),
+            greed:          rng(0.4, 0.9),
+            exploration:    rng(0.3, 0.7),
         };
-        
-        // Parametry osobowości (różnicuje zachowania botów)
-        this.personality = this.generatePersonality();
-        
-        // Cel i ścieżka
-        this.target = null;
-        this.targetType = null;
-        this.pathHistory = [];
-        this.fleeDirection = null;
-        this.fleeTimer = 0;
-        
-        // Taktyka walki
+
+        // ─── Styl walki (zależy od broni) ────────────────────
         this.combatStyle = this.determineCombatStyle();
-        this.kiteDirection = 1; // 1 lub -1 dla kierunku kręcenia
-        this.lastKiteSwitch = 0;
-        
-        // Timery
-        this.dangerCheckTimer = 0;
-        this.xpScanTimer = 0;
-        this.tacticalTimer = 0;
-        
-        // Cache dla optymalizacji
-        this.cachedNearbyMonsters = [];
-        this.cachedNearbyXp = [];
+
+        // ─── Cel ruchu ───────────────────────────────────────
+        this.destination = null;
+        this.destinationTimer = 0;
+
+        // ─── Kiting ──────────────────────────────────────────
+        this.kiteDir = Math.random() < 0.5 ? 1 : -1;
+        this.kiteDirTimer = 0;
+
+        // ─── Ucieczka ────────────────────────────────────────
+        this.fleeTimer = 0;
+        this.minFleeDuration = 1.5;
+
+        // ─── Stuck detection ─────────────────────────────────
+        this.lastX = bot.x;
+        this.lastY = bot.y;
+        this.stuckTimer = 0;
+
+        // ─── Cache (optymalizacja) ───────────────────────────
+        this.nearMonsters = [];
+        this.nearOrbs = [];
         this.cacheTimer = 0;
+
+        // ─── Pamięć zagrożeń ─────────────────────────────────
+        this.dangerZones = []; // [{x, y, expireTime}]
+        this.lastDamageTime = 0;
+
+        // ─── Statystyki ──────────────────────────────────────
+        this.totalKills = 0;
+        this.totalDeaths = 0;
+        this.survivalTime = 0;
     }
 
-    /**
-     * Generuje unikalną "osobowość" dla bota
-     */
-    generatePersonality() {
-        return {
-            aggression: rng(0.3, 1.0),      // Jak agresywnie atakuje
-            caution: rng(0.3, 1.0),          // Jak ostrożny jest
-            greed: rng(0.4, 0.9),            // Priorytet zbierania XP
-            patience: rng(0.3, 0.8),         // Jak długo czeka/planuje
-            exploration: rng(0.3, 0.7),      // Chęć eksploracji nowych miejsc
-            riskTolerance: rng(0.2, 0.8),    // Akceptacja ryzyka
-        };
-    }
+    // ═══════════════════════════════════════════════════════
+    //  GŁÓWNA PĘTLA DECYZYJNA
+    // ═══════════════════════════════════════════════════════
 
-    /**
-     * Określa styl walki na podstawie klasy i broni
-     */
-    determineCombatStyle() {
-        const weapon = this.bot.weapons[0];
-        if (!weapon) return 'melee';
-        
-        const weaponType = weapon.type;
-        
-        switch (weaponType) {
-            case 'aura':
-                return 'aura'; // Wchodzi w środek wrogów
-            case 'bow':
-            case 'lightning':
-            case 'crossbow':
-            case 'fireball':
-                return 'ranged'; // Utrzymuje dystans
-            case 'sword':
-            case 'axe':
-            case 'hammer':
-                return 'melee'; // Agresywne podejście
-            case 'dagger':
-                return 'assassin'; // Hit and run
-            default:
-                return 'balanced';
-        }
-    }
-
-    /**
-     * Główna funkcja decyzyjna
-     */
     decide(monsters, xpOrbs, dt = 0.016) {
-        // Aktualizuj cache co kilka klatek
+        this.survivalTime += dt;
+        this.stateTimer += dt;
+
+        // Aktualizuj cache co 100ms
         this.updateCache(monsters, xpOrbs, dt);
-        
-        // Sprawdź czy bot jest stuck
-        this.checkIfStuck(dt);
-        
+
+        // Aktualizuj kiting
+        this.kiteDirTimer += dt;
+        if (this.kiteDirTimer > 2.5 + Math.random() * 2) {
+            this.kiteDir *= -1;
+            this.kiteDirTimer = 0;
+        }
+
+        // Stuck detection
+        this.checkStuck(dt);
+        if (this.stuckTimer > 1.2) {
+            this.stuckTimer = 0;
+            this.destination = null;
+            const angle = Math.random() * Math.PI * 2;
+            return { move: { x: Math.cos(angle), y: Math.sin(angle) } };
+        }
+
         // Aktualizuj pamięć
         this.updateMemory(dt);
-        
-        // Oblicz kontekst sytuacyjny
-        const context = this.analyzeContext(monsters, xpOrbs);
-        
-        // System priorytetów - wybierz najważniejszą akcję
-        const priority = this.calculatePriorities(context);
-        
-        // Wybierz stan na podstawie priorytetów
-        this.selectState(priority, context);
-        
-        // Wykonaj wybraną akcję
-        return this.executeCurrentState(context, dt);
-    }
 
-    /**
-     * Aktualizuje cache dla optymalizacji
-     */
-    updateCache(monsters, xpOrbs, dt) {
-        this.cacheTimer -= dt;
-        
-        if (this.cacheTimer <= 0) {
-            this.cacheTimer = 0.1; // Aktualizuj co 100ms
-            
-            // Cache najbliższych potworów
-            this.cachedNearbyMonsters = monsters
-                .map(m => ({
-                    monster: m,
-                    dist: Math.hypot(m.x - this.bot.x, m.y - this.bot.y),
-                    threat: this.calculateThreat(m)
-                }))
-                .filter(m => m.dist < 800)
-                .sort((a, b) => a.dist - b.dist)
-                .slice(0, 20);
-            
-            // Cache najbliższych orbs
-            this.cachedNearbyXp = xpOrbs
-                .filter(o => o.life > 0)
-                .map(o => ({
-                    orb: o,
-                    dist: Math.hypot(o.x - this.bot.x, o.y - this.bot.y),
-                    value: o.val
-                }))
-                .filter(o => o.dist < 600)
-                .sort((a, b) => (b.value / b.dist) - (a.value / a.dist))
-                .slice(0, 15);
+        // Podejmij decyzję (nie co klatkę, dla stabilności)
+        this.decisionTimer -= dt;
+        if (this.decisionTimer <= 0) {
+            this.decisionTimer = this.decisionInterval;
+            this.selectState(monsters, xpOrbs);
         }
+
+        // Wykonaj wybrany stan
+        return this.executeState(dt, monsters, xpOrbs);
     }
 
-    /**
-     * Sprawdza czy bot utknął
-     */
-    checkIfStuck(dt) {
-        const dx = this.bot.x - this.memory.lastPosition.x;
-        const dy = this.bot.y - this.memory.lastPosition.y;
-        const moved = Math.hypot(dx, dy);
-        
-        if (moved < 5) {
-            this.memory.stuckTimer += dt;
-        } else {
-            this.memory.stuckTimer = 0;
-        }
-        
-        this.memory.lastPosition = { x: this.bot.x, y: this.bot.y };
-    }
+    // ═══════════════════════════════════════════════════════
+    //  SELEKCJA STANU (priorytetowa)
+    // ═══════════════════════════════════════════════════════
 
-    /**
-     * Aktualizuje pamięć bota
-     */
-    updateMemory(dt) {
-        // Usuń wygasłe niebezpieczne obszary
-        const now = Date.now();
-        this.memory.dangerousAreas = this.memory.dangerousAreas.filter(
-            area => area.expireTime > now
-        );
-        
-        // Aktualizuj klastry XP
-        this.xpScanTimer -= dt;
-        if (this.xpScanTimer <= 0) {
-            this.xpScanTimer = 2.0;
-            this.memory.knownXpClusters = this.findXpClusters();
-        }
-    }
-
-    /**
-     * Znajduje skupiska XP
-     */
-    findXpClusters() {
-        const clusters = [];
-        const checked = new Set();
-        
-        for (const orbData of this.cachedNearbyXp) {
-            if (checked.has(orbData.orb)) continue;
-            
-            const cluster = { x: orbData.orb.x, y: orbData.orb.y, totalValue: 0, orbCount: 0 };
-            
-            for (const other of this.cachedNearbyXp) {
-                const d = Math.hypot(other.orb.x - orbData.orb.x, other.orb.y - orbData.orb.y);
-                if (d < 150) {
-                    cluster.totalValue += other.value;
-                    cluster.orbCount++;
-                    cluster.x = (cluster.x + other.orb.x) / 2;
-                    cluster.y = (cluster.y + other.orb.y) / 2;
-                    checked.add(other.orb);
-                }
-            }
-            
-            if (cluster.orbCount >= 2) {
-                clusters.push(cluster);
-            }
-        }
-        
-        return clusters.sort((a, b) => b.totalValue - a.totalValue);
-    }
-
-    /**
-     * Oblicza zagrożenie pojedynczego potwora
-     */
-    calculateThreat(monster) {
-        let threat = 1;
-        
-        // Większe HP = większe zagrożenie
-        threat *= (monster.hp || 10) / 10;
-        
-        // Bliskość zwiększa zagrożenie
-        const dist = Math.hypot(monster.x - this.bot.x, monster.y - this.bot.y);
-        if (dist < 100) threat *= 2;
-        else if (dist < 200) threat *= 1.5;
-        
-        // Typ potwora (jeśli dostępny)
-        if (monster.isBoss) threat *= 3;
-        if (monster.isElite) threat *= 2;
-        
-        return threat;
-    }
-
-    /**
-     * Analizuje aktualną sytuację
-     */
-    analyzeContext(monsters, xpOrbs) {
+    selectState(monsters, xpOrbs) {
+        const hpPct = this.bot.getHealthPercent();
         const centerDist = Math.hypot(this.bot.x, this.bot.y);
         const currentZone = this.getZone(centerDist);
-        const hpPercent = this.bot.hp / this.bot.maxHp;
-        
-        // Oblicz łączne zagrożenie
-        let totalThreat = 0;
-        let immediateThreats = 0;
-        let monstersInRange = 0;
-        
-        for (const m of this.cachedNearbyMonsters) {
-            totalThreat += m.threat;
-            if (m.dist < 150) {
-                immediateThreats++;
-            }
-            if (m.dist < this.getWeaponRange()) {
-                monstersInRange++;
-            }
-        }
-        
-        // Znajdź najbliższe zagrożenie
-        const nearestThreat = this.cachedNearbyMonsters[0];
-        
-        // Oblicz potencjalne XP w pobliżu
-        let nearbyXpValue = 0;
-        for (const o of this.cachedNearbyXp) {
-            nearbyXpValue += o.value / (o.dist / 100);
-        }
-        
-        // Znajdź najbliższy klaster XP
-        const bestXpCluster = this.memory.knownXpClusters[0];
-        
-        // Sprawdź czy jesteśmy w strefie bezpiecznej
-        const inSafeZone = currentZone === 0;
-        const appropriateZone = this.isAppropriateZone(currentZone);
-        
-        return {
-            centerDist,
-            currentZone,
-            hpPercent,
-            totalThreat,
-            immediateThreats,
-            monstersInRange,
-            nearestThreat,
-            nearbyXpValue,
-            bestXpCluster,
-            inSafeZone,
-            appropriateZone,
-            isStuck: this.memory.stuckTimer > 1.0,
-            weaponReady: this.bot.weapons[0]?.timer <= 0,
-            level: this.bot.level,
-        };
-    }
-
-    /**
-     * Sprawdza czy obecna strefa jest odpowiednia dla poziomu
-     */
-    isAppropriateZone(zone) {
-        const level = this.bot.level;
-        
-        if (level < 3) return zone <= 1;
-        if (level < 5) return zone <= 2;
-        if (level < 8) return zone <= 3;
-        if (level < 12) return zone <= 4;
-        return true;
-    }
-
-    /**
-     * Zwraca zasięg głównej broni
-     */
-    getWeaponRange() {
-        const weapon = this.bot.weapons[0];
-        if (!weapon) return 100;
-        
-        const baseRange = weapon.stats?.range || 200;
-        
-        switch (weapon.type) {
-            case 'aura':
-                return weapon.stats?.radius || 150;
-            case 'bow':
-            case 'crossbow':
-                return 450;
-            case 'lightning':
-            case 'fireball':
-                return 400;
-            case 'sword':
-            case 'axe':
-                return 120;
-            case 'dagger':
-                return 80;
-            default:
-                return baseRange;
-        }
-    }
-
-    /**
-     * Oblicza priorytety dla różnych akcji
-     */
-    calculatePriorities(context) {
-        const { 
-            hpPercent, totalThreat, immediateThreats, nearbyXpValue,
-            currentZone, appropriateZone, isStuck
-        } = context;
-        
+        const recZone = this.getRecommendedZone();
+        const immediateCount = this.countMonstersInRange(120);
+        const nearCount = this.nearMonsters.length;
+        const weaponReady = this.isWeaponReady();
+        const nearXpValue = this.getNearXpValue();
         const p = this.personality;
-        
-        // Priorytet ucieczki
-        let fleePriority = 0;
-        if (hpPercent < 0.2) fleePriority = 100;
-        else if (hpPercent < 0.3) fleePriority = 70 * p.caution;
-        else if (hpPercent < 0.5 && immediateThreats > 3) fleePriority = 50 * p.caution;
-        if (totalThreat > 10 && hpPercent < 0.6) fleePriority += 30;
-        
-        // Priorytet leczenia (powrót do safe zone)
-        let healPriority = 0;
-        if (hpPercent < 0.5 && !context.inSafeZone) {
-            healPriority = (1 - hpPercent) * 60 * p.caution;
+
+        // Kontynuuj ucieczkę jeśli timer aktywny
+        if (this.fleeTimer > 0) return;
+
+        // ── 1. KRYTYCZNA UCIECZKA (HP < 20%) ────────────────
+        if (hpPct < 0.2 && immediateCount > 0) {
+            this.setState('flee');
+            this.fleeTimer = this.minFleeDuration + Math.random();
+            return;
         }
-        
-        // Priorytet walki
-        let combatPriority = 0;
-        if (context.monstersInRange > 0 && context.weaponReady) {
-            combatPriority = 40 * p.aggression;
-            if (hpPercent > 0.7) combatPriority += 20;
-            if (immediateThreats <= 2) combatPriority += 15;
+
+        // ── 2. UCIECZKA (niskie HP + zagrożenie) ────────────
+        if (hpPct < 0.35 * (0.5 + p.caution) && immediateCount > 2) {
+            this.setState('flee');
+            this.fleeTimer = 1.0 + Math.random();
+            return;
         }
-        
-        // Priorytet zbierania XP
-        let collectPriority = 0;
-        if (nearbyXpValue > 0) {
-            collectPriority = Math.min(50, nearbyXpValue * 2) * p.greed;
-            if (hpPercent > 0.6 && immediateThreats < 2) {
-                collectPriority += 20;
+
+        // ── 3. ZŁA STREFA - wracaj ──────────────────────────
+        if (currentZone > recZone + 1) {
+            this.setState('retreat');
+            return;
+        }
+
+        // ── 4. LECZENIE (niskie HP, mało wrogów) ────────────
+        if (hpPct < 0.45 * (0.5 + p.caution) && immediateCount === 0) {
+            this.setState('heal');
+            return;
+        }
+
+        // ── 5. ZBIERANIE XP (dużo orbów w pobliżu) ─────────
+        if (nearXpValue > 20 && hpPct > 0.5 && immediateCount < 3) {
+            this.setState('collect');
+            return;
+        }
+
+        // ── 6. WALKA (wrogowie w zasięgu broni) ─────────────
+        const weaponRange = this.getWeaponRange();
+        const inRangeCount = this.countMonstersInRange(weaponRange + 50);
+
+        if (inRangeCount > 0 && hpPct > 0.3) {
+            // Aura/melee: walcz jeśli nie za dużo wrogów
+            if (this.combatStyle === 'aura' || this.combatStyle === 'melee') {
+                if (immediateCount < 6 || hpPct > 0.6) {
+                    this.setState('combat');
+                    return;
+                }
+            }
+            // Ranged: walcz prawie zawsze
+            else {
+                this.setState('combat');
+                return;
             }
         }
-        
-        // Priorytet eksploracji/przechodzenia do innej strefy
-        let explorePriority = 10 * p.exploration;
-        if (!appropriateZone) {
-            if (currentZone > this.getRecommendedZone()) {
-                explorePriority = 60; // Musimy się wycofać
-            }
-        } else if (this.bot.level >= 5 && currentZone < this.getRecommendedZone()) {
-            explorePriority = 40 * p.aggression; // Możemy iść dalej
+
+        // ── 7. ZBIERANIE XP (trochę orbów) ──────────────────
+        if (nearXpValue > 5 && hpPct > 0.4) {
+            this.setState('collect');
+            return;
         }
-        
-        // Priorytet odblokowania (gdy stuck)
-        let unstuckPriority = isStuck ? 80 : 0;
-        
-        return {
-            flee: fleePriority,
-            heal: healPriority,
-            combat: combatPriority,
-            collect: collectPriority,
-            explore: explorePriority,
-            unstuck: unstuckPriority,
-        };
+
+        // ── 8. EKSPLORACJA ───────────────────────────────────
+        this.setState('explore');
     }
 
-    /**
-     * Zwraca rekomendowaną strefę dla obecnego poziomu
-     */
-    getRecommendedZone() {
-        const level = this.bot.level;
-        if (level < 3) return 0;
-        if (level < 5) return 1;
-        if (level < 8) return 2;
-        if (level < 12) return 3;
-        return 4;
-    }
-
-    /**
-     * Wybiera stan na podstawie priorytetów
-     */
-    selectState(priority, context) {
-        // Znajdź najwyższy priorytet
-        const sorted = Object.entries(priority).sort((a, b) => b[1] - a[1]);
-        const [topAction, topValue] = sorted[0];
-        
-        // Minimalna różnica żeby zmienić stan (zapobiega "migotaniu")
-        const currentPriority = priority[this.state] || 0;
-        const hysteresis = 10;
-        
-        if (topValue > currentPriority + hysteresis || this.stateTimer <= 0) {
-            this.state = topAction;
-            this.stateTimer = rng(0.5, 1.5) * this.personality.patience;
-            
-            // Reset targetów przy zmianie stanu
-            if (topAction !== this.state) {
-                this.target = null;
-                this.targetType = null;
+    setState(newState) {
+        if (this.state !== newState) {
+            this.state = newState;
+            this.stateTimer = 0;
+            if (newState !== 'combat') {
+                // Reset destination przy zmianie stanu (nie w combat)
+                this.destination = null;
             }
         }
-        
-        this.stateTimer -= 0.016;
     }
 
-    /**
-     * Wykonuje akcje dla obecnego stanu
-     */
-    executeCurrentState(context, dt) {
+    // ═══════════════════════════════════════════════════════
+    //  WYKONANIE STANÓW
+    // ═══════════════════════════════════════════════════════
+
+    executeState(dt, monsters, xpOrbs) {
+        // Dekrementuj timer ucieczki
+        if (this.fleeTimer > 0) this.fleeTimer -= dt;
+
         switch (this.state) {
-            case 'flee':
-                return this.executeFlee(context, dt);
-            case 'heal':
-                return this.executeHeal(context);
-            case 'combat':
-                return this.executeCombat(context, dt);
-            case 'collect':
-                return this.executeCollect(context);
-            case 'explore':
-                return this.executeExplore(context);
-            case 'unstuck':
-                return this.executeUnstuck();
-            default:
-                return this.executeExplore(context);
+            case 'flee':     return this.executeFlee();
+            case 'retreat':  return this.executeRetreat();
+            case 'heal':     return this.executeHeal();
+            case 'combat':   return this.executeCombat(dt);
+            case 'collect':  return this.executeCollect();
+            case 'explore':  return this.executeExplore(dt);
+            default:         return this.executeExplore(dt);
         }
     }
 
-    /**
-     * Wykonuje ucieczkę
-     */
-    executeFlee(context, dt) {
-        // Oblicz kierunek ucieczki - unikaj wszystkich zagrożeń
-        let fleeX = 0, fleeY = 0;
-        
-        for (const m of this.cachedNearbyMonsters.slice(0, 5)) {
-            const weight = 1 / (m.dist * m.dist + 1);
-            fleeX += (this.bot.x - m.monster.x) * weight * m.threat;
-            fleeY += (this.bot.y - m.monster.y) * weight * m.threat;
+    // ─── UCIECZKA ────────────────────────────────────────────
+
+    executeFlee() {
+        let fx = 0, fy = 0;
+
+        // Uciekaj od wszystkich bliskich wrogów (ważone dystansem)
+        for (const m of this.nearMonsters) {
+            if (m.dist > 400) break;
+            const weight = (400 - m.dist) / 400;
+            const dx = this.bot.x - m.monster.x;
+            const dy = this.bot.y - m.monster.y;
+            const d = m.dist || 1;
+            fx += (dx / d) * weight * m.threat;
+            fy += (dy / d) * weight * m.threat;
         }
-        
-        // Dodaj komponent w kierunku centrum (bezpieczeństwa)
-        const toCenterX = -this.bot.x;
-        const toCenterY = -this.bot.y;
-        const centerDist = Math.hypot(toCenterX, toCenterY);
-        
-        if (centerDist > 100) {
-            fleeX += toCenterX / centerDist * 0.5;
-            fleeY += toCenterY / centerDist * 0.5;
+
+        // Komponent do centrum (bezpieczeństwo)
+        const cd = Math.hypot(this.bot.x, this.bot.y);
+        if (cd > 500) {
+            fx += (-this.bot.x / cd) * 0.4;
+            fy += (-this.bot.y / cd) * 0.4;
         }
-        
-        // Unikaj krawędzi mapy
-        const WORLD = 12000;
-        const edgeBuffer = 500;
-        if (Math.abs(this.bot.x) > WORLD/2 - edgeBuffer) {
-            fleeX -= Math.sign(this.bot.x) * 2;
-        }
-        if (Math.abs(this.bot.y) > WORLD/2 - edgeBuffer) {
-            fleeY -= Math.sign(this.bot.y) * 2;
-        }
-        
-        const [nx, ny] = norm(fleeX, fleeY);
-        
-        return { move: { x: nx || 0, y: ny || 0 } };
+
+        // Unikaj krawędzi
+        this.addEdgeAvoidance(fx, fy);
+
+        return { move: this.normalizeMove(fx, fy) };
     }
 
-    /**
-     * Wykonuje leczenie (ruch do safe zone)
-     */
-    executeHeal(context) {
-        // Idź w kierunku centrum
-        const [nx, ny] = norm(-this.bot.x, -this.bot.y);
-        
-        // Unikaj potworów po drodze
-        let avoidX = 0, avoidY = 0;
-        for (const m of this.cachedNearbyMonsters.slice(0, 3)) {
-            if (m.dist < 200) {
-                avoidX += (this.bot.x - m.monster.x) / m.dist;
-                avoidY += (this.bot.y - m.monster.y) / m.dist;
-            }
+    // ─── ODWRÓT (zła strefa) ─────────────────────────────────
+
+    executeRetreat() {
+        const recZone = this.getRecommendedZone();
+        const targetRadius = this.getZoneRadius(recZone);
+
+        // Kierunek do odpowiedniej strefy (w stronę centrum, ale nie za daleko)
+        const cd = Math.hypot(this.bot.x, this.bot.y);
+
+        if (cd <= targetRadius + 200) {
+            // Już w dobrej strefie
+            this.setState('explore');
+            return this.executeExplore(0.016);
         }
-        
-        const finalX = nx * 0.7 + avoidX * 0.3;
-        const finalY = ny * 0.7 + avoidY * 0.3;
-        const [fnx, fny] = norm(finalX, finalY);
-        
-        return { move: { x: fnx, y: fny } };
+
+        // Idź w stronę centrum
+        let mx = -this.bot.x / cd;
+        let my = -this.bot.y / cd;
+
+        // Unikaj wrogów po drodze
+        const avoidance = this.getMonsterAvoidance(200, 0.4);
+        mx += avoidance.x;
+        my += avoidance.y;
+
+        return { move: this.normalizeMove(mx, my) };
     }
 
-    /**
-     * Wykonuje walkę - z różnymi stylami
-     */
-    executeCombat(context, dt) {
-        const nearest = context.nearestThreat;
-        if (!nearest) return this.executeExplore(context);
-        
-        const monster = nearest.monster;
-        const dist = nearest.dist;
-        
+    // ─── LECZENIE ────────────────────────────────────────────
+
+    executeHeal() {
+        const cd = Math.hypot(this.bot.x, this.bot.y);
+        const hpPct = this.bot.getHealthPercent();
+
+        // Jeśli HP jest OK, przejdź dalej
+        if (hpPct > 0.7) {
+            this.setState('explore');
+            return this.executeExplore(0.016);
+        }
+
+        // Idź do centrum
+        let mx = 0, my = 0;
+        if (cd > 200) {
+            mx = -this.bot.x / cd;
+            my = -this.bot.y / cd;
+        }
+
+        // Silne unikanie wrogów podczas leczenia
+        const avoidance = this.getMonsterAvoidance(250, 0.6);
+        mx += avoidance.x;
+        my += avoidance.y;
+
+        // Zbieraj XP po drodze (magnez)
+        const nearOrb = this.findBestOrb(200);
+        if (nearOrb) {
+            const dx = nearOrb.orb.x - this.bot.x;
+            const dy = nearOrb.orb.y - this.bot.y;
+            const d = nearOrb.dist || 1;
+            mx += (dx / d) * 0.2;
+            my += (dy / d) * 0.2;
+        }
+
+        return { move: this.normalizeMove(mx, my) };
+    }
+
+    // ─── WALKA ───────────────────────────────────────────────
+
+    executeCombat(dt) {
+        // Znajdź najlepszy cel
+        const target = this.selectCombatTarget();
+        if (!target) {
+            this.setState('explore');
+            return this.executeExplore(0.016);
+        }
+
+        const monster = target.monster;
+        const dist = target.dist;
+
         switch (this.combatStyle) {
-            case 'aura':
-                return this.combatAuraStyle(monster, dist, context);
-            case 'ranged':
-                return this.combatRangedStyle(monster, dist, context, dt);
-            case 'melee':
-                return this.combatMeleeStyle(monster, dist, context);
-            case 'assassin':
-                return this.combatAssassinStyle(monster, dist, context);
-            default:
-                return this.combatBalancedStyle(monster, dist, context);
+            case 'aura':     return this.combatAura(monster, dist);
+            case 'ranged':   return this.combatRanged(monster, dist);
+            case 'melee':    return this.combatMelee(monster, dist);
+            case 'assassin': return this.combatAssassin(monster, dist);
+            default:         return this.combatRanged(monster, dist);
         }
     }
 
-    /**
-     * Styl walki dla aury - wchodzi w grupy wrogów
-     */
-    combatAuraStyle(monster, dist, context) {
-        const auraRange = this.getWeaponRange();
-        
-        // Znajdź miejsce z największą gęstością wrogów
+    combatAura(monster, dist) {
+        // Aura: wchodź w grupy wrogów, ale nie za głęboko
+        // Znajdź punkt z najgęstszą grupą potworów
         let bestX = monster.x, bestY = monster.y;
         let maxDensity = 0;
-        
-        for (const m of this.cachedNearbyMonsters) {
+
+        const auraRange = this.getWeaponRange();
+
+        for (const m of this.nearMonsters.slice(0, 10)) {
             let density = 0;
-            for (const other of this.cachedNearbyMonsters) {
-                const d = Math.hypot(other.monster.x - m.monster.x, other.monster.y - m.monster.y);
-                if (d < auraRange) density++;
+            for (const other of this.nearMonsters) {
+                if (Math.hypot(other.monster.x - m.monster.x, other.monster.y - m.monster.y) < auraRange) {
+                    density++;
+                }
             }
             if (density > maxDensity) {
                 maxDensity = density;
@@ -573,202 +350,349 @@ export class BotAI {
                 bestY = m.monster.y;
             }
         }
-        
-        // Jeśli HP jest niskie, nie wchodź głęboko
-        if (context.hpPercent < 0.4 && context.immediateThreats > 2) {
-            return this.executeFlee(context);
+
+        // Nie wchodź za głęboko jeśli niskie HP
+        const hpPct = this.bot.getHealthPercent();
+        if (hpPct < 0.4 && this.countMonstersInRange(100) > 3) {
+            return this.executeFlee();
         }
-        
-        const [nx, ny] = norm(bestX - this.bot.x, bestY - this.bot.y);
-        return { move: { x: nx, y: ny } };
+
+        const dx = bestX - this.bot.x;
+        const dy = bestY - this.bot.y;
+        return { move: this.normalizeMove(dx, dy) };
     }
 
-    /**
-     * Styl walki dla broni dystansowych - kiting
-     */
-    combatRangedStyle(monster, dist, context, dt) {
-        const idealDist = this.getWeaponRange() * 0.7;
-        
-        // Zmień kierunek kręcenia co jakiś czas
-        this.lastKiteSwitch += dt;
-        if (this.lastKiteSwitch > 2 + Math.random() * 2) {
-            this.kiteDirection *= -1;
-            this.lastKiteSwitch = 0;
-        }
-        
-        let moveX, moveY;
-        
-        if (dist < idealDist - 50) {
+    combatRanged(monster, dist) {
+        const idealDist = this.getWeaponRange() * 0.65;
+        let mx, my;
+
+        if (dist < idealDist - 60) {
             // Za blisko - cofaj się
-            const [bx, by] = norm(this.bot.x - monster.x, this.bot.y - monster.y);
-            moveX = bx;
-            moveY = by;
-        } else if (dist > idealDist + 100) {
+            mx = this.bot.x - monster.x;
+            my = this.bot.y - monster.y;
+        } else if (dist > idealDist + 80) {
             // Za daleko - podejdź
-            const [ax, ay] = norm(monster.x - this.bot.x, monster.y - this.bot.y);
-            moveX = ax;
-            moveY = ay;
+            mx = monster.x - this.bot.x;
+            my = monster.y - this.bot.y;
         } else {
-            // Optymalny dystans - krąż
+            // Idealny dystans - krąż (kiting)
             const angle = Math.atan2(monster.y - this.bot.y, monster.x - this.bot.x);
-            const perpAngle = angle + (Math.PI / 2) * this.kiteDirection;
-            moveX = Math.cos(perpAngle);
-            moveY = Math.sin(perpAngle);
+            const perpAngle = angle + (Math.PI / 2) * this.kiteDir;
+            mx = Math.cos(perpAngle);
+            my = Math.sin(perpAngle);
         }
-        
+
         // Unikaj innych wrogów
-        for (const m of this.cachedNearbyMonsters.slice(1, 4)) {
-            if (m.dist < 150) {
-                moveX += (this.bot.x - m.monster.x) / m.dist * 0.5;
-                moveY += (this.bot.y - m.monster.y) / m.dist * 0.5;
-            }
-        }
-        
-        const [nx, ny] = norm(moveX, moveY);
-        return { move: { x: nx, y: ny } };
+        const avoidance = this.getMonsterAvoidance(130, 0.35);
+        mx += avoidance.x;
+        my += avoidance.y;
+
+        return { move: this.normalizeMove(mx, my) };
     }
 
-    /**
-     * Styl walki melee - agresywne podejście
-     */
-    combatMeleeStyle(monster, dist, context) {
+    combatMelee(monster, dist) {
         const attackRange = this.getWeaponRange();
-        
-        if (dist > attackRange + 20) {
-            // Podejdź do wroga
-            const [nx, ny] = norm(monster.x - this.bot.x, monster.y - this.bot.y);
-            return { move: { x: nx, y: ny } };
-        } else {
-            // W zasięgu - krąż wokół
-            const angle = Math.atan2(monster.y - this.bot.y, monster.x - this.bot.x);
-            const perpAngle = angle + Math.PI / 2;
-            return { move: { x: Math.cos(perpAngle), y: Math.sin(perpAngle) } };
+
+        if (dist > attackRange + 30) {
+            // Podejdź
+            return { move: this.normalizeMove(monster.x - this.bot.x, monster.y - this.bot.y) };
         }
+
+        // W zasięgu - krąż
+        const angle = Math.atan2(monster.y - this.bot.y, monster.x - this.bot.x);
+        const perpAngle = angle + (Math.PI / 2) * this.kiteDir;
+
+        let mx = Math.cos(perpAngle);
+        let my = Math.sin(perpAngle);
+
+        // Lekkie przyciąganie do celu (żeby nie oddalać się za bardzo)
+        mx += (monster.x - this.bot.x) / (dist || 1) * 0.15;
+        my += (monster.y - this.bot.y) / (dist || 1) * 0.15;
+
+        return { move: this.normalizeMove(mx, my) };
     }
 
-    combatAssassinStyle(monster, dist, context) {
-        const attackRange = this.getWeaponRange();
-        
-        // Jeśli broń gotowa - atakuj
-        if (context.weaponReady && dist > attackRange) {
-            const [nx, ny] = norm(monster.x - this.bot.x, monster.y - this.bot.y);
-            return { move: { x: nx * 1.2, y: ny * 1.2 } }; // Szybsze podejście
-        } else if (!context.weaponReady && dist < 150) {
+    combatAssassin(monster, dist) {
+        const weaponReady = this.isWeaponReady();
+
+        if (weaponReady && dist > 80) {
+            // Broń gotowa - szybko podejdź
+            return { move: this.normalizeMove(monster.x - this.bot.x, monster.y - this.bot.y) };
+        }
+
+        if (!weaponReady && dist < 130) {
             // Broń na cooldown - wycofaj się
-            const [nx, ny] = norm(this.bot.x - monster.x, this.bot.y - monster.y);
-            return { move: { x: nx, y: ny } };
+            return { move: this.normalizeMove(this.bot.x - monster.x, this.bot.y - monster.y) };
         }
-        
+
         // Krąż czekając na cooldown
         const angle = Math.atan2(monster.y - this.bot.y, monster.x - this.bot.x);
-        const perpAngle = angle + Math.PI / 2;
+        const perpAngle = angle + (Math.PI / 2) * this.kiteDir;
         return { move: { x: Math.cos(perpAngle), y: Math.sin(perpAngle) } };
     }
 
-    /**
-     * Zbalansowany styl walki
-     */
-    combatBalancedStyle(monster, dist, context) {
-        const idealDist = 200;
-        
-        if (dist > idealDist + 50) {
-            const [nx, ny] = norm(monster.x - this.bot.x, monster.y - this.bot.y);
-            return { move: { x: nx, y: ny } };
-        } else if (dist < idealDist - 50) {
-            const [nx, ny] = norm(this.bot.x - monster.x, this.bot.y - monster.y);
-            return { move: { x: nx, y: ny } };
+    // ─── ZBIERANIE XP ────────────────────────────────────────
+
+    executeCollect() {
+        // Znajdź najlepszy orb (wartość/dystans)
+        const best = this.findBestOrb(500);
+
+        if (!best) {
+            this.setState('explore');
+            return this.executeExplore(0.016);
         }
-        
-        const angle = Math.atan2(monster.y - this.bot.y, monster.x - this.bot.x);
-        const perpAngle = angle + Math.PI / 2;
-        return { move: { x: Math.cos(perpAngle), y: Math.sin(perpAngle) } };
+
+        let mx = best.orb.x - this.bot.x;
+        let my = best.orb.y - this.bot.y;
+
+        // Lekkie unikanie wrogów
+        const avoidance = this.getMonsterAvoidance(150, 0.25);
+        mx += avoidance.x;
+        my += avoidance.y;
+
+        return { move: this.normalizeMove(mx, my) };
     }
 
-    /**
-     * Wykonuje zbieranie XP
-     */
-    executeCollect(context) {
-        // Priorytet: klastry XP > pojedyncze duże orby > najbliższe orby
-        let targetX, targetY;
-        
-        const cluster = context.bestXpCluster;
-        if (cluster && cluster.totalValue > 50) {
-            targetX = cluster.x;
-            targetY = cluster.y;
-        } else if (this.cachedNearbyXp.length > 0) {
-            // Wybierz najlepszy stosunek wartości do odległości
-            const best = this.cachedNearbyXp[0];
-            targetX = best.orb.x;
-            targetY = best.orb.y;
-        } else {
-            return this.executeExplore(context);
+    // ─── EKSPLORACJA ─────────────────────────────────────────
+
+    executeExplore(dt) {
+        // Cel: poruszaj się po mapie w odpowiedniej strefie
+        this.destinationTimer += dt;
+
+        if (!this.destination || this.destinationTimer > 8 || this.reachedDest()) {
+            this.pickDestination();
+            this.destinationTimer = 0;
         }
-        
-        // Unikaj potworów po drodze
-        let avoidX = 0, avoidY = 0;
-        for (const m of this.cachedNearbyMonsters.slice(0, 3)) {
-            if (m.dist < 150) {
-                avoidX += (this.bot.x - m.monster.x) / m.dist * 0.3;
-                avoidY += (this.bot.y - m.monster.y) / m.dist * 0.3;
+
+        let mx = this.destination.x - this.bot.x;
+        let my = this.destination.y - this.bot.y;
+        const dist = Math.hypot(mx, my);
+
+        if (dist > 1) {
+            mx /= dist;
+            my /= dist;
+        }
+
+        // Zbieraj XP po drodze
+        const nearOrb = this.findBestOrb(200);
+        if (nearOrb) {
+            const dx = nearOrb.orb.x - this.bot.x;
+            const dy = nearOrb.orb.y - this.bot.y;
+            const d = nearOrb.dist || 1;
+            mx = mx * 0.6 + (dx / d) * 0.4;
+            my = my * 0.6 + (dy / d) * 0.4;
+        }
+
+        // Lekkie unikanie wrogów
+        const avoidance = this.getMonsterAvoidance(120, 0.2);
+        mx += avoidance.x;
+        my += avoidance.y;
+
+        return { move: this.normalizeMove(mx, my) };
+    }
+
+    // ═══════════════════════════════════════════════════════
+    //  HELPERY
+    // ═══════════════════════════════════════════════════════
+
+    updateCache(monsters, xpOrbs, dt) {
+        this.cacheTimer -= dt;
+        if (this.cacheTimer > 0) return;
+        this.cacheTimer = 0.1;
+
+        // Cache potworów
+        this.nearMonsters = [];
+        for (const m of monsters) {
+            if (m.hp <= 0) continue;
+            const dist = Math.hypot(m.x - this.bot.x, m.y - this.bot.y);
+            if (dist < 800) {
+                this.nearMonsters.push({
+                    monster: m,
+                    dist,
+                    threat: this.calcThreat(m, dist)
+                });
             }
         }
-        
-        const [nx, ny] = norm(targetX - this.bot.x + avoidX, targetY - this.bot.y + avoidY);
-        return { move: { x: nx, y: ny } };
-    }
+        this.nearMonsters.sort((a, b) => a.dist - b.dist);
+        if (this.nearMonsters.length > 20) this.nearMonsters.length = 20;
 
-    /**
-     * Wykonuje eksplorację
-     */
-    executeExplore(context) {
-        const recommendedZone = this.getRecommendedZone();
-        const targetRadius = this.getZoneRadius(recommendedZone);
-        const currentDist = context.centerDist;
-        
-        // Cel: być w odpowiedniej strefie
-        let targetAngle;
-        
-        if (this.target && this.targetType === 'explore') {
-            // Kontynuuj do obecnego celu
-            const dx = this.target.x - this.bot.x;
-            const dy = this.target.y - this.bot.y;
-            if (Math.hypot(dx, dy) < 200) {
-                // Osiągnięto cel - wybierz nowy
-                this.target = null;
+        // Cache orbów
+        this.nearOrbs = [];
+        for (const o of xpOrbs) {
+            if (o.life <= 0) continue;
+            const dist = Math.hypot(o.x - this.bot.x, o.y - this.bot.y);
+            if (dist < 500) {
+                this.nearOrbs.push({ orb: o, dist, value: o.val || 1 });
             }
         }
-        
-        if (!this.target) {
-            // Wybierz nowy cel eksploracji
-            targetAngle = Math.random() * Math.PI * 2;
-            const targetDist = targetRadius * (0.5 + Math.random() * 0.4);
-            this.target = {
-                x: Math.cos(targetAngle) * targetDist,
-                y: Math.sin(targetAngle) * targetDist
-            };
-            this.targetType = 'explore';
-        }
-        
-        const [nx, ny] = norm(this.target.x - this.bot.x, this.target.y - this.bot.y);
-        return { move: { x: nx, y: ny } };
+        this.nearOrbs.sort((a, b) => (b.value / (b.dist + 30)) - (a.value / (a.dist + 30)));
+        if (this.nearOrbs.length > 15) this.nearOrbs.length = 15;
     }
 
-    executeUnstuck() {
-        // Losowy kierunek
+    checkStuck(dt) {
+        const moved = Math.hypot(this.bot.x - this.lastX, this.bot.y - this.lastY);
+        this.stuckTimer = moved < 3 ? this.stuckTimer + dt : 0;
+        this.lastX = this.bot.x;
+        this.lastY = this.bot.y;
+    }
+
+    updateMemory(dt) {
+        const now = Date.now();
+        this.dangerZones = this.dangerZones.filter(z => z.expireTime > now);
+    }
+
+    calcThreat(monster, dist) {
+        let threat = 1;
+        const hp = monster.hp || 10;
+        const dmg = monster.dmg || 5;
+        threat *= (hp / 15);
+        threat *= (dmg / 8);
+        if (dist < 100) threat *= 2.5;
+        else if (dist < 200) threat *= 1.5;
+        if (monster.isBoss) threat *= 4;
+        if (monster.isElite) threat *= 2;
+        return threat;
+    }
+
+    countMonstersInRange(range) {
+        let count = 0;
+        for (const m of this.nearMonsters) {
+            if (m.dist > range) break;
+            count++;
+        }
+        return count;
+    }
+
+    getNearXpValue() {
+        let total = 0;
+        for (const o of this.nearOrbs) {
+            total += o.value * (1 - o.dist / 500);
+        }
+        return total;
+    }
+
+    findBestOrb(maxRange) {
+        for (const o of this.nearOrbs) {
+            if (o.dist <= maxRange) return o;
+        }
+        return null;
+    }
+
+    selectCombatTarget() {
+        if (this.nearMonsters.length === 0) return null;
+
+        // Priorytet:
+        // 1. Niskie HP (łatwy kill = XP)
+        // 2. Boss/elite (dużo XP)
+        // 3. Najbliższy w zasięgu broni
+
+        const range = this.getWeaponRange() + 100;
+        const inRange = this.nearMonsters.filter(m => m.dist < range);
+
+        if (inRange.length === 0) return this.nearMonsters[0];
+
+        // Szukaj łatwego killa
+        const lowHp = inRange.find(m => m.monster.hp < 20);
+        if (lowHp) return lowHp;
+
+        // Boss
+        const boss = inRange.find(m => m.monster.isBoss);
+        if (boss) return boss;
+
+        // Najbliższy
+        return inRange[0];
+    }
+
+    getMonsterAvoidance(range, strength) {
+        let ax = 0, ay = 0;
+        for (const m of this.nearMonsters) {
+            if (m.dist > range) break;
+            const weight = (range - m.dist) / range;
+            ax += (this.bot.x - m.monster.x) / (m.dist || 1) * weight;
+            ay += (this.bot.y - m.monster.y) / (m.dist || 1) * weight;
+        }
+        return { x: ax * strength, y: ay * strength };
+    }
+
+    addEdgeAvoidance(fx, fy) {
+        const HALF = 6000;
+        const EDGE = 500;
+        if (this.bot.x > HALF - EDGE) fx -= 2;
+        if (this.bot.x < -HALF + EDGE) fx += 2;
+        if (this.bot.y > HALF - EDGE) fy -= 2;
+        if (this.bot.y < -HALF + EDGE) fy += 2;
+    }
+
+    determineCombatStyle() {
+        const weapon = this.bot.weapons?.[0];
+        if (!weapon) return 'melee';
+
+        const map = {
+            aura: 'aura',
+            bow: 'ranged', crossbow: 'ranged', lightning: 'ranged',
+            fireball: 'ranged', laser: 'ranged', meteor: 'ranged',
+            sword: 'melee', axe: 'melee',
+            knife: 'assassin',
+            poison: 'aura', mine: 'ranged',
+        };
+        return map[weapon.type] || 'melee';
+    }
+
+    getWeaponRange() {
+        const weapon = this.bot.weapons?.[0];
+        if (!weapon) return 150;
+
+        const ranges = {
+            aura: 150, bow: 420, crossbow: 380, lightning: 380,
+            fireball: 320, laser: 400, meteor: 350,
+            sword: 130, axe: 140, knife: 100,
+            poison: 140, mine: 100,
+        };
+        return ranges[weapon.type] || 200;
+    }
+
+    isWeaponReady() {
+        const w = this.bot.weapons?.[0];
+        return w ? w.timer <= 0 : false;
+    }
+
+    pickDestination() {
+        const level = this.bot.level || 1;
+        const recZone = this.getRecommendedZone();
+        const targetRadius = this.getZoneRadius(recZone);
+
+        // Losowy punkt w odpowiedniej strefie
         const angle = Math.random() * Math.PI * 2;
-        this.memory.stuckTimer = 0;
-        
-        return { move: { x: Math.cos(angle), y: Math.sin(angle) } };
+        const dist = targetRadius * (0.3 + Math.random() * 0.6);
+
+        this.destination = {
+            x: Math.cos(angle) * dist,
+            y: Math.sin(angle) * dist
+        };
+    }
+
+    reachedDest() {
+        if (!this.destination) return true;
+        return Math.hypot(this.destination.x - this.bot.x, this.destination.y - this.bot.y) < 150;
+    }
+
+    normalizeMove(x, y) {
+        const len = Math.hypot(x, y);
+        if (len === 0) return { x: 0, y: 0 };
+        return { x: x / len, y: y / len };
+    }
+
+    getRecommendedZone() {
+        const level = this.bot.level || 1;
+        if (level < 3) return 0;
+        if (level < 6) return 1;
+        if (level < 9) return 2;
+        if (level < 13) return 3;
+        return 4;
     }
 
     getZoneRadius(zone) {
-        switch (zone) {
-            case 0: return 1500;
-            case 1: return 3000;
-            case 2: return 4500;
-            case 3: return 6000;
-            default: return 6000;
-        }
+        return [1200, 2500, 4000, 5500, 6000][Math.min(zone, 4)];
     }
 
     getZone(centerDist) {
@@ -779,26 +703,42 @@ export class BotAI {
         return 4;
     }
 
+    // ═══════════════════════════════════════════════════════
+    //  CALLBACKI
+    // ═══════════════════════════════════════════════════════
+
     onDamageTaken(amount, source) {
-        this.memory.lastDamageTime = Date.now();
-        this.memory.lastDamageSource = source;
-        
+        this.lastDamageTime = Date.now();
+
         if (source) {
-            this.memory.dangerousAreas.push({
+            this.dangerZones.push({
                 x: source.x || this.bot.x,
                 y: source.y || this.bot.y,
-                radius: 200,
                 expireTime: Date.now() + 5000
             });
         }
+
+        // Automatyczna ucieczka przy dużych obrażeniach
+        const hpPct = this.bot.getHealthPercent();
+        if (hpPct < 0.25 && this.state !== 'flee') {
+            this.setState('flee');
+            this.fleeTimer = 2;
+        }
     }
 
-    onKill() {
-        this.memory.recentKills++;
+    onKill(victim) {
+        this.totalKills++;
     }
 
     onDeath() {
-        this.memory.deathCount++;
-        this.personality.caution = Math.min(1, this.personality.caution + 0.1);
+        this.totalDeaths++;
+        // Po śmierci: zwiększ ostrożność
+        this.personality.caution = Math.min(1, this.personality.caution + 0.08);
+        this.personality.aggression = Math.max(0.2, this.personality.aggression - 0.05);
+        this.survivalTime = 0;
+    }
+
+    onXpGained(amount) {
+        // Mogłoby wpływać na greed
     }
 }

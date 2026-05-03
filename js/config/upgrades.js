@@ -15,7 +15,7 @@ export const UPGRADE_TYPES = {
         id: 'attackSpeed',
         name: 'Szybkość Ataku',
         icon: '⚡',
-        desc: 'Zwiększa szybkość ataku o +X%',
+    desc: 'Zwiększa szybkość ataku o +X%',
         ranges: {
             common: [8, 15],
             enhanced: [15, 25],
@@ -30,10 +30,10 @@ export const UPGRADE_TYPES = {
         desc: '+X pocisków',
         isAdditive: true,
         ranges: {
-            common: [1, 1],
-            enhanced: [1, 2],
-            rare: [2, 3],
-            legendary: [3, 5]
+            common: [0.5, 0.5],
+            enhanced: [0.5, 1.0],
+            rare: [1.0, 1.5],
+            legendary: [1.5, 2.5]
         }
     },
     projectileSize: {
@@ -67,10 +67,10 @@ export const UPGRADE_TYPES = {
         desc: '+X przebić',
         isAdditive: true,
         ranges: {
-            common: [1, 1],
-            enhanced: [1, 2],
-            rare: [2, 3],
-            legendary: [3, 4]
+            common: [0.5, 0.5],
+            enhanced: [0.5, 1.0],
+            rare: [1.0, 1.5],
+            legendary: [1.5, 2.5]
         }
     },
     range: {
@@ -92,10 +92,10 @@ export const UPGRADE_TYPES = {
         desc: '+X odbić',
         isAdditive: true,
         ranges: {
-            common: [1, 1],
-            enhanced: [1, 2],
-            rare: [2, 3],
-            legendary: [3, 4]
+            common: [0.5, 0.5],
+            enhanced: [0.5, 1.0],
+            rare: [1.0, 1.5],
+            legendary: [1.5, 2.0]
         }
     },
     chain: {
@@ -105,10 +105,10 @@ export const UPGRADE_TYPES = {
         desc: '+X przeskoków',
         isAdditive: true,
         ranges: {
-            common: [1, 1],
-            enhanced: [1, 2],
-            rare: [2, 3],
-            legendary: [3, 5]
+            common: [0.5, 0.5],
+            enhanced: [0.5, 1.0],
+            rare: [1.0, 1.5],
+            legendary: [1.5, 2.5]
         }
     },
     duration: {
@@ -133,6 +133,30 @@ export const UPGRADE_TYPES = {
             enhanced: [30, 50],
             rare: [50, 80],
             legendary: [80, 120]
+        }
+    },
+    critChance: {
+        id: 'critChance',
+        name: 'Szansa na Krytyk',
+        icon: '🎯',
+        desc: 'Zwiększa szansę na krytyk o +X%',
+        ranges: {
+            common: [3, 5],
+            enhanced: [5, 10],
+            rare: [10, 15],
+            legendary: [15, 25]
+        }
+    },
+    critDamage: {
+        id: 'critDamage',
+        name: 'Obrażenia Krytyczne',
+        icon: '💥💥',
+        desc: 'Zwiększa obrażenia krytyczne o +X%',
+        ranges: {
+            common: [10, 20],
+            enhanced: [20, 35],
+            rare: [35, 55],
+            legendary: [55, 85]
         }
     },
     bookPower: {

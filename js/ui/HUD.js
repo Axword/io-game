@@ -11,7 +11,31 @@ export class HUD {
         this.killFeed = document.getElementById('kf');
         this.minimap = document.getElementById('minimap');
         this.minimapCtx = this.minimap.getContext('2d');
-        
+
+        // Nowe elementy statystyk
+        this.statsContainer = document.createElement('div');
+        this.statsContainer.id = 'player-stats';
+        this.statsContainer.style.position = 'fixed';
+        this.statsContainer.style.bottom = '160px';
+        this.statsContainer.style.left = '20px';
+        this.statsContainer.style.display = 'flex';
+        this.statsContainer.style.flexDirection = 'column';
+        this.statsContainer.style.gap = '4px';
+        this.statsContainer.style.zIndex = '100';
+        document.getElementById('ui').appendChild(this.statsContainer);
+
+
+        this.weaponSlots = [0, 1, 2, 3].map(i => ({
+            el: document.getElementById(`ws${i}`),
+            icon: document.querySelector(`#ws${i} .wi`),
+            name: document.querySelector(`#ws${i} .wn`)
+        }));
+
+        this.bookSlots = [0, 1, 2, 3, 4].map(i => ({
+            el: document.getElementById(`bs${i}`),
+            icon: document.querySelector(`#bs${i} .bi`),
+            name: document.querySelector(`#bs${i} .bn`)
+        }));
         // Rozmiar minimappy z HTML elementu
         this.sz = this.minimap.width || 110;
         
@@ -27,22 +51,22 @@ export class HUD {
 
     update(player, zones) {
         if (!player) return;
-        
+
         // HP bar
         const hpPct = Math.max(0, player.hp / player.maxHp) * 100;
         this.hpFill.style.width = hpPct + '%';
         this.hpTxt.textContent = `${Math.ceil(player.hp)} / ${player.maxHp}`;
-        
+
         // XP bar
         const xpPct = (player.xp / player.xpNeeded) * 100;
         this.xpFill.style.width = xpPct + '%';
         this.xpTxt.textContent = `${Math.floor(player.xp)} / ${player.xpNeeded}`;
         this.lvlTxt.textContent = `LVL ${player.level}`;
-        
+
         // Strefa
         const zi = getZoneIdx(player.x, player.y, zones);
         this.zoneTxt.textContent = zones[zi].name;
-        
+
         const centerDist = Math.hypot(player.x, player.y);
         if (centerDist < 800) {
             this.zoneTxt.style.color = '#ff0000';
@@ -57,112 +81,174 @@ export class HUD {
             this.zoneTxt.style.borderColor = 'rgba(0, 0, 0, .15)';
             this.zoneTxt.style.background = 'rgba(255, 255, 255, .85)';
         }
-        
+
         this.updateWeaponSlots(player);
         this.updateBookSlots(player);
+        this.updatePlayerStats(player);
     }
 
     updateWeaponSlots(player) {
         for (let i = 0; i < 4; i++) {
-            const el = document.getElementById('ws' + i);
+            const slot = this.weaponSlots[i];
+            const weapon = player.weapons[i];
+
+            if (weapon && window.WEAPONS?.[weapon.type]) {
+                const wd = window.WEAPONS[weapon.type];
+                slot.icon.textContent = wd.icon;
+                slot.name.textContent = wd.name;
+                slot.el.classList.add('active');
+            } else {
+                slot.icon.textContent = '—';
+                slot.name.textContent = '';
+                slot.el.classList.remove('active');
+            }
+        }
+    }
+    updateBookSlots(player) {
+        if (!player.books) return;
+        
+        const BOOKS = window.BOOKS || {};
+        
+        for (let i = 0; i < 5; i++) {
+            const el = document.getElementById('bs' + i);
             if (!el) continue;
-            const w = player.weapons[i];
             
-            if (w) {
+            const book = player.books[i];
+            
+            if (book && BOOKS[book.type]) {
                 const wi = el.querySelector('.wi');
                 const wn = el.querySelector('.wn');
-                const WEAPONS = window.WEAPONS || {};
-                if (WEAPONS[w.type]) {
-                    if (wi) wi.textContent = WEAPONS[w.type].icon;
-                    if (wn) wn.textContent = WEAPONS[w.type].name;
+                const bookData = BOOKS[book.type];
+                
+                if (wi) wi.textContent = bookData.icon;
+                if (wn) wn.textContent = bookData.name;
+                
+                // Pokaż poziom księgi
+                const level = book.level || 1;
+                if (level > 1) {
+                    el.setAttribute('data-level', level);
                     el.classList.add('active');
+                } else {
+                    el.setAttribute('data-level', '1');
+                    el.classList.remove('active');
                 }
+                
+                // Tooltip z efektami księgi
+                el.title = this.getBookTooltip(book, bookData, player);
+                
             } else {
                 const wi = el.querySelector('.wi');
                 const wn = el.querySelector('.wn');
                 if (wi) wi.textContent = '—';
                 if (wn) wn.textContent = '';
+                el.removeAttribute('data-level');
                 el.classList.remove('active');
+                el.title = '';
             }
         }
     }
 
-updateBookSlots(player) {
-    if (!player.books) return;
-    
-    const BOOKS = window.BOOKS || {};
-    
-    for (let i = 0; i < 5; i++) {
-        const el = document.getElementById('bs' + i);
-        if (!el) continue;
-        
-        const book = player.books[i];
-        
-        if (book && BOOKS[book.type]) {
-            const wi = el.querySelector('.wi');
-            const wn = el.querySelector('.wn');
-            const bookData = BOOKS[book.type];
-            
-            if (wi) wi.textContent = bookData.icon;
-            if (wn) wn.textContent = bookData.name;
-            
-            // Pokaż poziom księgi
-            const level = book.level || 1;
-            if (level > 1) {
-                el.setAttribute('data-level', level);
-                el.classList.add('active');
-            } else {
-                el.setAttribute('data-level', '1');
-                el.classList.remove('active');
-            }
-            
-            // Tooltip z efektami księgi
-            el.title = this.getBookTooltip(book, bookData, player);
-            
-        } else {
-            const wi = el.querySelector('.wi');
-            const wn = el.querySelector('.wn');
-            if (wi) wi.textContent = '—';
-            if (wn) wn.textContent = '';
-            el.removeAttribute('data-level');
-            el.classList.remove('active');
-            el.title = '';
-        }
-    }
-}
     getBookTooltip(book, bookData, player) {
         const level = book.level || 1;
         const stats = book.stats || {};
-        
         let tooltip = `${bookData.name} (Poziom ${level})\n${bookData.desc}\n\n`;
-        
-        // Dodaj konkretne wartości statystyk
+
         if (bookData.type === 'vitality') {
-            tooltip += `❤️ +${Math.round(stats.maxHp || 0)} Max HP`;
-        } else if (bookData.type === 'armor') {
-            tooltip += `🛡️ +${Math.round(stats.armor || 0)} Pancerz\n`;
-            const reduction = Math.min(75, (stats.armor || 0) / 100 * 100);
-            tooltip += `(-${reduction.toFixed(1)}% obrażeń)`;
-        } else if (bookData.type === 'regeneration') {
-            tooltip += `💚 +${(stats.regen || 0).toFixed(1)} HP/s`;
+            const baseHp = CLASSES[player.cls].hp;
+            const bonusHp = Math.round(baseHp * stats.maxHp * level);
+            tooltip += `❤️ +${bonusHp} Max HP`;
         } else if (bookData.type === 'speed') {
-            tooltip += `💨 +${((stats.moveSpeed || 0) * 100).toFixed(0)}% Prędkości`;
-        } else if (bookData.type === 'luck') {
-            tooltip += `🍀 +${Math.round(stats.luck || 0)} Szczęście`;
-        } else if (bookData.type === 'magnet') {
-            tooltip += `🧲 +${Math.round(stats.magnetRange || 0)} Zasięg XP`;
+            tooltip += `💨 +${Math.round(stats.moveSpeed * 100 * level)}% Prędkość`;
         } else if (bookData.type === 'cooldown') {
-            tooltip += `⏰ -${(stats.cooldownReduction || 0).toFixed(0)}% Cooldown`;
-        } else if (bookData.type === 'area') {
-            tooltip += `💫 +${(stats.areaBonus || 0).toFixed(0)}% Obszar`;
+            tooltip += `⏰ -${Math.round(stats.cooldownReduction * level)}% Cooldown`;
+        } else if (bookData.type === 'magnet') {
+            tooltip += `🧲 +${Math.round(stats.magnetRange * level)} Zasięg XP`;
         } else if (bookData.type === 'critical') {
-            tooltip += `🎯 +${(stats.critChance || 0).toFixed(0)}% Szansa na Kryt\n`;
-            tooltip += `💥 +${Math.round(stats.critDamage || 0)}% Obrażenia Kryt`;
+            tooltip += `🎯 +${Math.round(stats.critChance * level)}% Szansa na Krytyk\n`;
+            tooltip += `💥 +${Math.round(stats.critDamage * level)}% Obrażenia Kryt`;
+        } else if (bookData.type === 'damage') {
+            tooltip += `💥 +${Math.round(stats.damageBonus * level)}% Obrażenia`;
+        } else if (bookData.type === 'area') {
+            tooltip += `💫 +${Math.round(stats.areaBonus * level)}% Obszar`;
+        } else if (bookData.type === 'luck') {
+            tooltip += `🍀 +${Math.round(stats.luck * level)} Szczęście`;
         } else if (bookData.type === 'revival') {
-            tooltip += `👼 +${Math.round(stats.revives || 0)} Dodatkowe życia`;
+            tooltip += `👼 +${Math.round(stats.revives * level)} Dodatkowe życia`;
+        } else if (bookData.type === 'regeneration') {
+            tooltip += `💚 +${stats.regen * level} HP/s`;
         }
-        
+
         return tooltip;
+    }
+
+    updatePlayerStats(player) {
+        this.statsContainer.innerHTML = '';
+
+        // Podstawowe statystyki
+        this.addStat('❤️', 'HP', `${Math.ceil(player.hp)} / ${player.maxHp}`);
+        this.addStat('💨', 'Prędkość', `${Math.round(player.speed * 100)}%`);
+        this.addStat('⚡', 'Szybkość Ataku', `${Math.round((1 / player.weapons[0]?.stats?.atkSpd || 1) * 100)}%`);
+
+        // Statystyki krytyczne
+        if (player.critChance > 0) {
+            this.addStat('🎯', 'Szansa na Krytyk', `${Math.round(player.critChance)}%`);
+            this.addStat('💥💥', 'Obrażenia Kryt', `${Math.round(player.critDamage)}%`);
+        }
+
+        // Statystyki z książek
+        if (player.armor > 0) {
+            const reduction = Math.min(75, Math.round(player.armor));
+            this.addStat('🛡️', 'Redukcja Obrażeń', `-${reduction}%`);
+        }
+
+        if (player.regen > 0) {
+            this.addStat('💚', 'Regeneracja', `+${player.regen}/s`);
+        }
+
+        if (player.cooldownReduction > 0) {
+            this.addStat('⏰', 'Redukcja Cooldown', `-${Math.round(player.cooldownReduction)}%`);
+        }
+
+        if (player.areaBonus > 0) {
+            this.addStat('💫', 'Bonus Obszaru', `+${Math.round(player.areaBonus)}%`);
+        }
+
+        if (player.damageBonus > 0) {
+            this.addStat('💥', 'Bonus Obrażeń', `+${Math.round(player.damageBonus)}%`);
+        }
+
+        if (player.magnetRange > 100) {
+            this.addStat('🧲', 'Zasięg XP', `+${Math.round(player.magnetRange - 100)}`);
+        }
+    }
+
+    addStat(icon, name, value) {
+        const statEl = document.createElement('div');
+        statEl.style.display = 'flex';
+        statEl.style.alignItems = 'center';
+        statEl.style.gap = '6px';
+        statEl.style.fontSize = '11px';
+        statEl.style.color = 'white';
+        statEl.style.textShadow = '0 1px 2px rgba(0,0,0,0.7)';
+        statEl.style.fontFamily = "'Share Tech Mono', monospace";
+
+        const iconEl = document.createElement('span');
+        iconEl.textContent = icon;
+        iconEl.style.fontSize = '14px';
+
+        const nameEl = document.createElement('span');
+        nameEl.textContent = name;
+        nameEl.style.flex = '1';
+
+        const valueEl = document.createElement('span');
+        valueEl.textContent = value;
+        valueEl.style.fontWeight = 'bold';
+
+        statEl.appendChild(iconEl);
+        statEl.appendChild(nameEl);
+        statEl.appendChild(valueEl);
+
+        this.statsContainer.appendChild(statEl);
     }
 
     // ============================================================
