@@ -259,6 +259,18 @@ export class Game {
 
     updateCollisions(dt) {
         this.collisionSystem.checkBulletCollisions(this.bullets, this.monsters, this.player, this.bots, this.bosses);
+// Dodaj nowe pociski z bounce
+const newBullets = [];
+for (const b of this.bullets) {
+    if (b._spawnQueue) {
+        newBullets.push(...b._spawnQueue);
+        b._spawnQueue = null;
+    }
+}
+this.bullets.push(...newBullets);
+for (const b of newBullets) {
+    this.scene.add(b.mesh);
+}
         this.collisionSystem.checkMonsterPlayerCollisions(this.monsters, this.player, dt);
         this.collisionSystem.checkMonsterBotCollisions(this.monsters, this.bots, dt);
         this.collisionSystem.checkBossPlayerCollisions(this.bosses, this.player, dt);
@@ -397,7 +409,9 @@ export class Game {
 
         this.weaponSystem.setupAura(this.player);
         this.hud.addKillFeed('Odrodzony!');
+       this.pendingUpgrades = 0;
         this.state = 'playing';
+
     }
 
     leaveRoom() {
