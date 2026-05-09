@@ -69,10 +69,10 @@ export class CollisionSystem {
             if (b.hit.has(m)) continue;
 
             const hitR = b.wtype === 'sword'
-    ? (m.sz * 0.75) + (b.sz * 60)
-    : b.wtype === 'knife'
-    ? (m.sz * 0.75) + (b.sz * 7)   // większy hitbox dla noża, zmień 8 na większą wartość
-    : (m.sz * 0.75) + (b.sz * 3);
+                ? (m.sz * 0.75) + (b.sz * 60)
+                : b.wtype === 'knife'
+                ? (m.sz * 0.75) + (b.sz * 7)   // większy hitbox dla noża, zmień 8 na większą wartość
+                : (m.sz * 0.75) + (b.sz * 3);
             const dist = Math.hypot(b.x - m.x, b.y - m.y);
 
             if (dist < hitR) {
