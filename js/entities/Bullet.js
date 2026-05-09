@@ -109,31 +109,31 @@ export class Bullet {
             case 'bow':
                 return new THREE.PlaneGeometry(sz * 20, sz * 6);
             case 'knife': {
-    const s = new THREE.Shape();
-  const scale = sz * 24;
+                const s = new THREE.Shape();
+                const scale = sz * 24;
 
-  s.moveTo(0, scale * 1.1);
-  s.quadraticCurveTo(scale * 0.15, scale * 0.3, scale * 0.3, scale * 0.3);
-  s.lineTo(scale * 1.1, 0);
-  s.quadraticCurveTo(scale * 0.3, -scale * 0.15, scale * 0.3, -scale * 0.3);
-  s.lineTo(0, -scale * 1.1);
-  s.quadraticCurveTo(-scale * 0.15, -scale * 0.3, -scale * 0.3, -scale * 0.3);
-  s.lineTo(-scale * 1.1, 0);
-  s.quadraticCurveTo(-scale * 0.3, scale * 0.15, -scale * 0.3, scale * 0.3);
-  s.closePath();
+              s.moveTo(0, scale * 1.1);
+              s.quadraticCurveTo(scale * 0.15, scale * 0.3, scale * 0.3, scale * 0.3);
+              s.lineTo(scale * 1.1, 0);
+              s.quadraticCurveTo(scale * 0.3, -scale * 0.15, scale * 0.3, -scale * 0.3);
+              s.lineTo(0, -scale * 1.1);
+              s.quadraticCurveTo(-scale * 0.15, -scale * 0.3, -scale * 0.3, -scale * 0.3);
+              s.lineTo(-scale * 1.1, 0);
+              s.quadraticCurveTo(-scale * 0.3, scale * 0.15, -scale * 0.3, scale * 0.3);
+              s.closePath();
 
-  // Central circle hole path
-  const hole = new THREE.Path();
-  hole.absarc(0, 0, scale * 0.18, 0, Math.PI * 2, true);
-  s.holes.push(hole);
+              // Central circle hole path
+              const hole = new THREE.Path();
+              hole.absarc(0, 0, scale * 0.18, 0, Math.PI * 2, true);
+              s.holes.push(hole);
 
-  return new THREE.ExtrudeGeometry(s, {
-    depth: scale * 0.08,
-    bevelEnabled: true,
-    bevelThickness: scale * 0.015,
-    bevelSize: scale * 0.015,
-    bevelSegments: 3
-  });
+              return new THREE.ExtrudeGeometry(s, {
+                depth: scale * 0.08,
+                bevelEnabled: true,
+                bevelThickness: scale * 0.015,
+                bevelSize: scale * 0.015,
+                bevelSegments: 3
+              });
 }
             case 'mine':
                 return new THREE.CircleGeometry(sz * 10, 16);
