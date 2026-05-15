@@ -108,8 +108,33 @@ export class Bullet {
         switch (wtype) {
             case 'bow':
                 return new THREE.PlaneGeometry(sz * 20, sz * 6);
-            case 'knife':
-                return new THREE.PlaneGeometry(sz * 12, sz * 3);
+            case 'knife': {
+                const s = new THREE.Shape();
+                const scale = sz * 24;
+
+              s.moveTo(0, scale * 1.1);
+              s.quadraticCurveTo(scale * 0.15, scale * 0.3, scale * 0.3, scale * 0.3);
+              s.lineTo(scale * 1.1, 0);
+              s.quadraticCurveTo(scale * 0.3, -scale * 0.15, scale * 0.3, -scale * 0.3);
+              s.lineTo(0, -scale * 1.1);
+              s.quadraticCurveTo(-scale * 0.15, -scale * 0.3, -scale * 0.3, -scale * 0.3);
+              s.lineTo(-scale * 1.1, 0);
+              s.quadraticCurveTo(-scale * 0.3, scale * 0.15, -scale * 0.3, scale * 0.3);
+              s.closePath();
+
+              // Central circle hole path
+              const hole = new THREE.Path();
+              hole.absarc(0, 0, scale * 0.18, 0, Math.PI * 2, true);
+              s.holes.push(hole);
+
+              return new THREE.ExtrudeGeometry(s, {
+                depth: scale * 0.08,
+                bevelEnabled: true,
+                bevelThickness: scale * 0.015,
+                bevelSize: scale * 0.015,
+                bevelSegments: 3
+              });
+}
             case 'mine':
                 return new THREE.CircleGeometry(sz * 10, 16);
             case 'laser':
@@ -146,19 +171,41 @@ export class Bullet {
             }
             case 'sword': {
                 const s = new THREE.Shape();
-                const scale = sz * 16;
-                s.moveTo(0, scale * 1.5);
-                s.lineTo(-scale * 0.4, scale * 0.4);
-                s.lineTo(-scale * 0.15, scale * 0.2);
-                s.lineTo(-scale * 0.15, -scale * 0.7);
-                s.lineTo(-scale * 0.3, -scale * 0.75);
-                s.lineTo(-scale * 0.3, -scale * 0.9);
-                s.lineTo(0, -scale);
-                s.lineTo(scale * 0.3, -scale * 0.9);
-                s.lineTo(scale * 0.3, -scale * 0.75);
-                s.lineTo(scale * 0.15, -scale * 0.7);
-                s.lineTo(scale * 0.15, scale * 0.2);
-                s.lineTo(scale * 0.4, scale * 0.4);
+                const scale = sz * 24;
+
+                // Ostrze (Blade) - WYDŁUŻONE
+                s.moveTo(0, -scale * 2.4); 
+                s.lineTo(-scale * 0.16, -scale * 1.9);
+                s.lineTo(-scale * 0.14, -scale * 0.2);
+
+                // Jelec (Crossguard) - SKRÓCONY i POSZERZONY w pionie
+                s.lineTo(-scale * 0.75, -scale * 0.16); 
+                s.lineTo(-scale * 0.75, -scale * 0.02);
+                s.lineTo(-scale * 0.15, 0);
+
+                // Rękojeść (Grip) idzie w GÓRĘ
+                s.lineTo(-scale * 0.1, scale * 0.8);
+
+                // Głowica (Pommel)
+                s.lineTo(-scale * 0.35, scale * 0.85);
+                s.lineTo(-scale * 0.35, scale * 1.0);
+                s.lineTo(0, scale * 1.1); 
+
+                s.lineTo(scale * 0.35, scale * 1.0);
+                s.lineTo(scale * 0.35, scale * 0.85);
+
+                // Rękojeść (Grip) - prawa
+                s.lineTo(scale * 0.1, scale * 0.8);
+
+                // Jelec (Crossguard) - prawy
+                s.lineTo(scale * 0.15, 0);
+                s.lineTo(scale * 0.75, -scale * 0.02);
+                s.lineTo(scale * 0.75, -scale * 0.16);
+
+                // Ostrze (Blade) - prawa
+                s.lineTo(scale * 0.14, -scale * 0.2);
+                s.lineTo(scale * 0.16, -scale * 1.9);
+
                 s.closePath();
                 return new THREE.ShapeGeometry(s);
             }
@@ -186,8 +233,8 @@ export class Bullet {
     }
 
     createOutlines(wtype, sz, col) {
-        const outerGeo = this.createGeometry(wtype, sz * 1.3);
-        const innerGeo = this.createGeometry(wtype, sz * 1.15);
+        const outerGeo = this.createGeometry(wtype, sz * 1.25);
+        const innerGeo = this.createGeometry(wtype, sz * 1.10);
 
         this.whiteOutline = new THREE.Mesh(outerGeo, new THREE.MeshBasicMaterial({
             color: 0xffffff, side: THREE.DoubleSide
@@ -293,7 +340,7 @@ export class Bullet {
                 // Miecz obraca się przodem do kierunku ruchu
                 if (this.owner) {
                     const angle = (this.baseAngle || 0) + this.animTime * (this.orbitSpeed || 3);
-                    this.mesh.rotation.z = angle + Math.PI / 2;
+                    this.mesh.rotation.z = angle + Math.PI / 2 + ((this.orbitSlot || 0) / (this.orbitSlotsTotal || 1)) * Math.PI * 2;
                 }
                 break;
             case 'mine':

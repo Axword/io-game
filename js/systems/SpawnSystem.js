@@ -14,11 +14,11 @@ export class SpawnSystem {
         this.difficulty = 'medium';
         this.difficultyConfig = DIFFICULTY_CONFIG;
         this.zoneLimits = [
-            { zone: 0, limit: 600, current: 0 },
-            { zone: 1, limit: 800, current: 0 },
-            { zone: 2, limit: 1000, current: 0 },
-            { zone: 3, limit: 900, current: 0 },
-            { zone: 4, limit: 1200, current: 0 }
+            { zone: 0, limit: 500, current: 0 },
+            { zone: 1, limit: 600, current: 0 },
+            { zone: 2, limit: 700, current: 0 },
+            { zone: 3, limit: 800, current: 0 },
+            { zone: 4, limit: 900, current: 0 }
         ];
     }
     setDifficulty(diff) {
@@ -224,8 +224,27 @@ export class SpawnSystem {
         this.updateBossWarnings(dt);
         
         for (const m of monsters) {
-            m.update(dt, targets, 0, bullets, scene);
+    m.update(dt, targets, 0, bullets, scene);
+}
+
+// Separacja potworów - max 80% nakładania się
+for (let i = 0; i < monsters.length; i++) {
+    for (let j = i + 1; j < monsters.length; j++) {
+        const a = monsters[i];
+        const b = monsters[j];
+        const dx = b.x - a.x;
+        const dy = b.y - a.y;
+        const dist = Math.hypot(dx, dy);
+        const minDist = (a.sz + b.sz) * 0.8;
+        if (dist < minDist && dist > 0.1) {
+            const push = (minDist - dist) / dist * 0.5;
+            a.x -= dx * push;
+            a.y -= dy * push;
+            b.x += dx * push;
+            b.y += dy * push;
         }
+    }
+}
         
         if (bosses) {
             for (const boss of bosses) {

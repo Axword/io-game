@@ -68,7 +68,11 @@ export class CollisionSystem {
             if (m.hp <= 0) continue;
             if (b.hit.has(m)) continue;
 
-            const hitR = (m.sz * 0.75) + (b.sz * 3);
+            const hitR = b.wtype === 'sword'
+                ? (m.sz * 0.75) + (b.sz * 60)
+                : b.wtype === 'knife'
+                ? (m.sz * 0.75) + (b.sz * 7)   // większy hitbox dla noża, zmień 8 na większą wartość
+                : (m.sz * 0.75) + (b.sz * 3);
             const dist = Math.hypot(b.x - m.x, b.y - m.y);
 
             if (dist < hitR) {
@@ -345,39 +349,33 @@ export class CollisionSystem {
     // ─── Bounce (noże) ───────────────────────────────────────
 
     handleBounce(b, hitMonster, monsters) {
-        b.bounces--;
+    b.bounces = 0; // zużyj wszystkie bounce'y
+    b.life = -1;   // zniszcz oryginalny nóż
 
-        // Znajdź najbliższy cel do odbicia
-        let nearest = null;
-        let nearestDist = 350;
+    // Spawn 4 noży we wszystkich kierunkach
+    const angles = [0, Math.PI / 2, Math.PI, Math.PI * 1.5];
+    const spd = Math.hypot(b.vx, b.vy);
 
-        for (const mm of monsters) {
-            if (mm.hp <= 0 || b.hit.has(mm)) continue;
-
-            const d = Math.hypot(mm.x - b.x, mm.y - b.y);
-            if (d < nearestDist) {
-                nearestDist = d;
-                nearest = mm;
-            }
-        }
-
-        if (nearest) {
-            const [nx, ny] = norm(nearest.x - b.x, nearest.y - b.y);
-            const spd = Math.hypot(b.vx, b.vy);
-            b.vx = nx * spd;
-            b.vy = ny * spd;
-
-            // Odśwież rotację noża
-            if (b.wtype === 'knife') {
-                b.mesh.rotation.z = Math.atan2(b.vy, b.vx);
-            }
-        } else {
-            // Brak celu do odbicia - leci dalej
-            if (b.bounces <= 0) {
-                // Ostatnie odbicie, leci dalej aż zgaśnie
-            }
-        }
+    for (const angle of angles) {
+        const newBullet = new b.constructor(
+            hitMonster.x, hitMonster.y,
+            Math.cos(angle) * spd,
+            Math.sin(angle) * spd,
+            Math.round(b.dmg * 1.2),
+            b.owner,
+            b.wtype,
+            b.sz,
+            0,        // bez bounce
+            999999,   // piercing
+            b.col,
+            b.scene
+        );
+        newBullet.life = 0.05; // żyje 1 sekundę
+        newBullet.hit.add(hitMonster); // nie trafi w tego samego
+        b._spawnQueue = b._spawnQueue || [];
+        b._spawnQueue.push(newBullet);
     }
+}
 
     // ─── Oblicz obrażenia (z krytem) ─────────────────────────
 

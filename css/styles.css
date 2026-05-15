@@ -357,10 +357,10 @@ body {
 }
 
 .up-card {
-    padding: 20px 14px;
+    padding: 10px 10px;
     border-radius: 10px;
     cursor: pointer;
-    width: 195px;
+    width: 145px;
     text-align: center;
     border: 2px solid rgba(0, 0, 0, .12);
     pointer-events: all;
@@ -375,8 +375,8 @@ body {
 }
 
 .up-icon {
-    font-size: 30px;
-    margin-bottom: 8px;
+    font-size: 20px;
+    margin-bottom: 4px;
 }
 
 .up-wname {
@@ -595,8 +595,12 @@ body {
 }
 
 #s-upgrade {
-    background: rgba(240, 240, 240, .85);
-    backdrop-filter: blur(3px);
+    background: transparent !important;
+    backdrop-filter: none !important;
+    justify-content: flex-start !important;
+    align-items: center !important;
+    padding-top: 8px !important;
+    pointer-events: none;
 }
 
 .panel-box {
