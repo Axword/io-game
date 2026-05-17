@@ -508,9 +508,21 @@ export class Monster extends Entity {
         this.outline.material.opacity = (this.isElite ? 0.6 : 0.2) * opacity;
     }
 
-    takeDamage(amount) {
+    takeDamage(amount, attacker = null) {
         this.hp -= amount;
         this.hitTimer = 0.1;
+
+        // Śledź kto zadał ŁĄCZNIE NAJWIĘCEJ obrażeń → dostaje XP
+        if (attacker && attacker !== 'monster' && attacker !== 'boss') {
+            if (!this._dmgMap) this._dmgMap = new Map();
+            const prev = this._dmgMap.get(attacker) || 0;
+            this._dmgMap.set(attacker, prev + amount);
+            let topDmg = 0, topAttacker = attacker;
+            for (const [a, d] of this._dmgMap) {
+                if (d > topDmg) { topDmg = d; topAttacker = a; }
+            }
+            this.lastHitBy = topAttacker;
+        }
 
         if (this.state === 'despawning' || this.state === 'returning') {
             this.state = 'attacking';

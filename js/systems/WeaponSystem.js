@@ -131,10 +131,12 @@ export class WeaponSystem {
         const initialTargets = sorted.slice(0, targets);
 
         for (const { m: target } of initialTargets) {
-            // Uderz pierwszy cel
-            target.takeDamage(dmg);
+            // Uderz pierwszy cel (boty z mnożnikiem PvP)
+            const firstDmg = target.isBot ? dmg * 0.35 : dmg;
+            target.takeDamage(firstDmg, owner);
+            if (target.isBot && target.botAI?.onDamageTaken) target.botAI.onDamageTaken(firstDmg, owner);
             if (owner === entity && entity.totalDmg !== undefined) {
-                entity.totalDmg += dmg;
+                entity.totalDmg += firstDmg;
             }
 
             // SFX - błyskawica do pierwszego celu
@@ -146,14 +148,14 @@ export class WeaponSystem {
             let chainDmg = dmg;
 
             for (let c = 0; c < chains; c++) {
-                chainDmg *= 0.7; // Każdy łańcuch traci 30% dmg
+                chainDmg *= 0.7;
 
-                // Znajdź najbliższego nie-trafionego wroga
                 let nextTarget = null;
                 let nearestDist = chainRange;
 
                 for (const m of monsters) {
                     if (m.hp <= 0 || hitSet.has(m)) continue;
+                    if (m === entity) continue;
                     const d = Math.hypot(m.x - lastX, m.y - lastY);
                     if (d < nearestDist) {
                         nearestDist = d;
@@ -163,12 +165,13 @@ export class WeaponSystem {
 
                 if (!nextTarget) break;
 
-                nextTarget.takeDamage(chainDmg);
+                const chainHitDmg = nextTarget.isBot ? chainDmg * 0.35 : chainDmg;
+                nextTarget.takeDamage(chainHitDmg, owner);
+                if (nextTarget.isBot && nextTarget.botAI?.onDamageTaken) nextTarget.botAI.onDamageTaken(chainHitDmg, owner);
                 if (owner === entity && entity.totalDmg !== undefined) {
-                    entity.totalDmg += chainDmg;
+                    entity.totalDmg += chainHitDmg;
                 }
 
-                // SFX łańcucha
                 this.createLightningFX(lastX, lastY, nextTarget.x, nextTarget.y, fxList, 0xcccc00);
 
                 hitSet.add(nextTarget);
@@ -499,14 +502,18 @@ export class WeaponSystem {
             entity.auraInnerMat.opacity = 0.04 + Math.sin(Date.now() * 0.005) * 0.02;
         }
 
-        // Obrażenia
+        // Obrażenia (monsters może zawierać też boty-AI jako cele)
         for (const m of monsters) {
             if (m.hp <= 0) continue;
+            if (m === entity) continue; // nie bij siebie
             const dist = Math.hypot(m.x - entity.x, m.y - entity.y);
             if (dist < range) {
-                m.takeDamage(dmg * dt);
+                // Dla botów-AI: 35% obrażeń PvP
+                const auraDmg = m.isBot ? dmg * dt * 0.35 : dmg * dt;
+                m.takeDamage(auraDmg, entity);
+                if (m.isBot && m.botAI?.onDamageTaken) m.botAI.onDamageTaken(auraDmg, entity);
                 if (owner === entity && entity.totalDmg !== undefined) {
-                    entity.totalDmg += dmg * dt;
+                    entity.totalDmg += auraDmg;
                 }
             }
         }
@@ -534,8 +541,19 @@ export class WeaponSystem {
         let nearest = null;
         let nearestDist = range;
 
+        // Dla botów: cel PvP ma najwyższy priorytet gdy w zasięgu
+        if (entity.isBot) {
+            const pvpTarget = entity.botAI?.getPvpTarget?.();
+            if (pvpTarget && pvpTarget.hp > 0) {
+                const pvpDist = Math.hypot(pvpTarget.x - entity.x, pvpTarget.y - entity.y);
+                if (pvpDist < range) return pvpTarget;
+            }
+        }
+
+        // Dla wszystkich: wybierz najbliższy cel z listy (zawiera moby + gracza + boty)
         for (const m of monsters) {
             if (m.hp <= 0) continue;
+            if (m === entity) continue;
             const d = Math.hypot(m.x - entity.x, m.y - entity.y);
             if (d < nearestDist) {
                 nearestDist = d;
