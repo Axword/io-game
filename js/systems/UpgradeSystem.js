@@ -99,11 +99,22 @@ export class UpgradeSystem {
                 const upgradeType = UPGRADE_TYPES[upgradeId];
                 if (!upgradeType) continue;
 
-                const upgradeKey = weapon.type + '_' + upgradeId;
+                // Sprawdź ile razy dany upgrade był już nałożony
+                if (!weapon.upgradeApplyCount) weapon.upgradeApplyCount = {};
+                const applyCount = weapon.upgradeApplyCount[upgradeId] || 0;
 
-                // Każdy upgrade tylko RAZ
-                if (weapon.appliedUpgrades && weapon.appliedUpgrades.has(upgradeKey)) {
-                    continue;
+                // Dla projectileCount: pozwól wielokrotnie (max maxCount-1 razy)
+                // Dla pozostałych: tylko raz
+                let maxApply = 1;
+                if (upgradeId === 'projectileCount') {
+                    const maxCount = weapon.stats?.maxCount || 4;
+                    maxApply = maxCount - 1; // można mieć max 4 mieczy, start 1 -> 3 upgrady
+                }
+
+                const upgradeKey = weapon.type + '_' + upgradeId + '_' + applyCount;
+
+                if (applyCount >= maxApply) {
+                    continue; // już osiągnięto maksimum dla tego upgradu
                 }
 
                 // Zwiększ szansę na upgrade jeśli gracz ma odpowiednią księgę
@@ -323,10 +334,15 @@ export class UpgradeSystem {
             if (!weapon.appliedUpgrades) {
                 weapon.appliedUpgrades = new Set();
             }
+            if (!weapon.upgradeApplyCount) {
+                weapon.upgradeApplyCount = {};
+            }
 
-            // Oznacz jako zastosowany (tylko jeśli nie duplikat)
+            // Oznacz jako zastosowany
             if (!card.isDuplicate) {
                 weapon.appliedUpgrades.add(card.upgradeKey);
+                // Zwiększ licznik nałożeń tego upgradu
+                weapon.upgradeApplyCount[card.upgradeId] = (weapon.upgradeApplyCount[card.upgradeId] || 0) + 1;
             }
 
             const statName = this.getStatName(card.upgradeId, card.itemTypeId);

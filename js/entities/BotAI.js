@@ -1,744 +1,613 @@
-
 import { rng, norm } from '../utils/math.js';
 
 /**
- * System AI dla botów w vampire-survivor IO
- * 
- * Kluczowe zasady przetrwania:
- * 1. Nie wchodź w strefę za trudną na twój poziom
- * 2. Uciekaj ZANIM HP spadnie za nisko
- * 3. Zbieraj XP agresywnie - poziom = siła
- * 4. Walcz tylko gdy to opłacalne
- * 5. Zawsze się ruszaj - stanie = śmierć
+ * BotAI v2.3
+ * - 2 style: vs Mobki (Def/Neu/Agg) + vs Gracze (Def/Neu/Agg)
+ * - Strefy wg levelu: strefa N wymaga level >= N * step
+ * - Inteligentny dodge per typ broni
+ * - Priorytet XP z zabitych mobów (automatyczny)
+ * - Upgrade: wybiera najlepsza kartę wg rzadkości
  */
+
+export const PVP_DMG_MULTIPLIER = 0.35;
+export const PLAYER_DMG_TO_BOT  = 0.35;
+
+const PVP_AGGRO_RANGE = { defensive: 150, neutral: 320, aggressive: 700 };
+const ZONE_LEVEL_STEP = { defensive: 7,   neutral: 6,   aggressive: 5  };
+const UPGRADE_RARITY_VALUE = { common: 1, enhanced: 2, rare: 3, legendary: 4 };
+
 export class BotAI {
     constructor(bot) {
         this.bot = bot;
-
-        // ─── Stan ────────────────────────────────────────────
-        this.state = 'explore';
-        this.stateTimer = 0;
+        this.state         = 'explore';
+        this.stateTimer    = 0;
         this.decisionTimer = 0;
-        this.decisionInterval = 0.15; // Co ile sekund podejmujemy decyzję
+        this.decisionInterval = 0.18;
 
-        // ─── Osobowość (różnicuje boty) ──────────────────────
-        this.personality = {
-            aggression:     rng(0.3, 1.0),
-            caution:        rng(0.3, 1.0),
-            greed:          rng(0.4, 0.9),
-            exploration:    rng(0.3, 0.7),
-        };
+        this.mobStyle = this._roll(['defensive', 'neutral', 'aggressive']);
+        this.pvpStyle = this._roll(['defensive', 'neutral', 'aggressive']);
 
-        // ─── Styl walki (zależy od broni) ────────────────────
-        this.combatStyle = this.determineCombatStyle();
+        this.zoneLevelStep = ZONE_LEVEL_STEP[this.mobStyle];
+        this.pvpAggroRange = PVP_AGGRO_RANGE[this.pvpStyle];
 
-        // ─── Cel ruchu ───────────────────────────────────────
-        this.destination = null;
+        this.destination      = null;
         this.destinationTimer = 0;
 
-        // ─── Kiting ──────────────────────────────────────────
-        this.kiteDir = Math.random() < 0.5 ? 1 : -1;
+        this.kiteDir      = Math.random() < 0.5 ? 1 : -1;
         this.kiteDirTimer = 0;
 
-        // ─── Ucieczka ────────────────────────────────────────
-        this.fleeTimer = 0;
-        this.minFleeDuration = 1.5;
+        this.fleeTimer       = 0;
+        this.pvpFleeTimer    = 0;
+        this.pvpTarget       = null;
+        this.pvpEngaged      = false;
+        this.pvpDecisionCD   = 0;
 
-        // ─── Stuck detection ─────────────────────────────────
-        this.lastX = bot.x;
-        this.lastY = bot.y;
+        this.lastX      = bot.x;
+        this.lastY      = bot.y;
         this.stuckTimer = 0;
 
-        // ─── Cache (optymalizacja) ───────────────────────────
         this.nearMonsters = [];
-        this.nearOrbs = [];
-        this.cacheTimer = 0;
+        this.nearOrbs     = [];
+        this.nearPlayers  = [];
+        this.cacheTimer   = 0;
+        this.CACHE_RATE   = 0.12;
 
-        // ─── Pamięć zagrożeń ─────────────────────────────────
-        this.dangerZones = []; // [{x, y, expireTime}]
-        this.lastDamageTime = 0;
+        this.combatStyle = this._determineCombatStyle();
 
-        // ─── Statystyki ──────────────────────────────────────
-        this.totalKills = 0;
-        this.totalDeaths = 0;
+        this.totalKills   = 0;
+        this.totalDeaths  = 0;
         this.survivalTime = 0;
+        this.pvpKills     = 0;
     }
 
-    // ═══════════════════════════════════════════════════════
-    //  GŁÓWNA PĘTLA DECYZYJNA
-    // ═══════════════════════════════════════════════════════
+    _roll(opts) { return opts[Math.floor(Math.random() * opts.length)]; }
 
-    decide(monsters, xpOrbs, dt = 0.016) {
+    // ════════════════════════════════════════
+    //  GŁÓWNA PĘTLA
+    // ════════════════════════════════════════
+
+    decide(monsters, xpOrbs, dt, allPlayers = []) {
         this.survivalTime += dt;
-        this.stateTimer += dt;
+        this.stateTimer   += dt;
 
-        // Aktualizuj cache co 100ms
-        this.updateCache(monsters, xpOrbs, dt);
+        this._updateCache(monsters, xpOrbs, allPlayers, dt);
 
-        // Aktualizuj kiting
         this.kiteDirTimer += dt;
-        if (this.kiteDirTimer > 2.5 + Math.random() * 2) {
-            this.kiteDir *= -1;
-            this.kiteDirTimer = 0;
+        if (this.kiteDirTimer > 2.0 + Math.random() * 2) {
+            this.kiteDir *= -1; this.kiteDirTimer = 0;
         }
 
-        // Stuck detection
-        this.checkStuck(dt);
-        if (this.stuckTimer > 1.2) {
-            this.stuckTimer = 0;
-            this.destination = null;
-            const angle = Math.random() * Math.PI * 2;
-            return { move: { x: Math.cos(angle), y: Math.sin(angle) } };
+        // Stuck check
+        const moved = Math.hypot(this.bot.x - this.lastX, this.bot.y - this.lastY);
+        this.stuckTimer = moved < 2 ? this.stuckTimer + dt : 0;
+        this.lastX = this.bot.x; this.lastY = this.bot.y;
+
+        if (this.stuckTimer > 1.5) {
+            this.stuckTimer = 0; this.destination = null;
+            const a = Math.random() * Math.PI * 2;
+            return { move: { x: Math.cos(a), y: Math.sin(a) } };
         }
 
-        // Aktualizuj pamięć
-        this.updateMemory(dt);
+        if (this.pvpDecisionCD > 0)  this.pvpDecisionCD -= dt;
+        if (this.pvpFleeTimer > 0)   this.pvpFleeTimer  -= dt;
+        if (this.fleeTimer > 0)      this.fleeTimer     -= dt;
 
-        // Podejmij decyzję (nie co klatkę, dla stabilności)
         this.decisionTimer -= dt;
         if (this.decisionTimer <= 0) {
             this.decisionTimer = this.decisionInterval;
-            this.selectState(monsters, xpOrbs);
+            this._selectState();
         }
 
-        // Wykonaj wybrany stan
-        return this.executeState(dt, monsters, xpOrbs);
+        // Natychmiastowy dodge — gdy mob bardzo blisko, nie czeka na cykl decyzyjny
+        if (this.state !== 'flee' && this.state !== 'pvp_flee' && this.state !== 'retreat') {
+            const veryClose = this._countInRange(this.nearMonsters, 65);
+            if (veryClose >= 2) {
+                // Silne odpychanie bez zmiany stanu (bot dalej walczy)
+                const av = this._avoidance(160, 2.5);
+                if (Math.hypot(av.x, av.y) > 0.3) {
+                    return { move: this._norm(av.x, av.y) };
+                }
+            }
+        }
+
+        return this._executeState(dt);
     }
 
-    // ═══════════════════════════════════════════════════════
-    //  SELEKCJA STANU (priorytetowa)
-    // ═══════════════════════════════════════════════════════
+    // ════════════════════════════════════════
+    //  SELEKCJA STANU
+    // ════════════════════════════════════════
 
-    selectState(monsters, xpOrbs) {
-        const hpPct = this.bot.getHealthPercent();
-        const centerDist = Math.hypot(this.bot.x, this.bot.y);
-        const currentZone = this.getZone(centerDist);
-        const recZone = this.getRecommendedZone();
-        const immediateCount = this.countMonstersInRange(120);
-        const nearCount = this.nearMonsters.length;
-        const weaponReady = this.isWeaponReady();
-        const nearXpValue = this.getNearXpValue();
-        const p = this.personality;
+    _selectState() {
+        const hpPct       = this.bot.hp / this.bot.maxHp;
+        const immediateN  = this._countInRange(this.nearMonsters, 110);
+        const nearXp      = this._xpValue();
 
-        // Kontynuuj ucieczkę jeśli timer aktywny
         if (this.fleeTimer > 0) return;
+        if (this.pvpFleeTimer > 0) { this.state = 'pvp_flee'; return; }
 
-        // ── 1. KRYTYCZNA UCIECZKA (HP < 20%) ────────────────
-        if (hpPct < 0.2 && immediateCount > 0) {
-            this.setState('flee');
-            this.fleeTimer = this.minFleeDuration + Math.random();
-            return;
-        }
-
-        // ── 2. UCIECZKA (niskie HP + zagrożenie) ────────────
-        if (hpPct < 0.35 * (0.5 + p.caution) && immediateCount > 2) {
-            this.setState('flee');
-            this.fleeTimer = 1.0 + Math.random();
-            return;
-        }
-
-        // ── 3. ZŁA STREFA - wracaj ──────────────────────────
-        if (currentZone > recZone + 1) {
-            this.setState('retreat');
-            return;
-        }
-
-        // ── 4. LECZENIE (niskie HP, mało wrogów) ────────────
-        if (hpPct < 0.45 * (0.5 + p.caution) && immediateCount === 0) {
-            this.setState('heal');
-            return;
-        }
-
-        // ── 5. ZBIERANIE XP (dużo orbów w pobliżu) ─────────
-        if (nearXpValue > 20 && hpPct > 0.5 && immediateCount < 3) {
-            this.setState('collect');
-            return;
-        }
-
-        // ── 6. WALKA (wrogowie w zasięgu broni) ─────────────
-        const weaponRange = this.getWeaponRange();
-        const inRangeCount = this.countMonstersInRange(weaponRange + 50);
-
-        if (inRangeCount > 0 && hpPct > 0.3) {
-            // Aura/melee: walcz jeśli nie za dużo wrogów
-            if (this.combatStyle === 'aura' || this.combatStyle === 'melee') {
-                if (immediateCount < 6 || hpPct > 0.6) {
-                    this.setState('combat');
-                    return;
-                }
+        // PvP check
+        const pvpT = this._findPvpTarget();
+        if (pvpT && this.pvpDecisionCD <= 0) {
+            const dec = this._decidePvp(hpPct, immediateN);
+            if (dec === 'fight') {
+                this.pvpTarget = pvpT; this.pvpEngaged = true;
+                this.state = 'pvp_fight'; return;
+            } else if (dec === 'flee') {
+                this.pvpEngaged = false; this.pvpTarget = null;
+                this.pvpFleeTimer = 2 + Math.random();
+                this.state = 'pvp_flee'; this.pvpDecisionCD = 3; return;
             }
-            // Ranged: walcz prawie zawsze
-            else {
-                this.setState('combat');
-                return;
-            }
+            this.pvpDecisionCD = 4;
+        }
+        if (this.pvpEngaged) {
+            if (!pvpT || pvpT.hp <= 0) { this.pvpEngaged = false; this.pvpTarget = null; }
+            else { this.state = 'pvp_fight'; return; }
         }
 
-        // ── 7. ZBIERANIE XP (trochę orbów) ──────────────────
-        if (nearXpValue > 5 && hpPct > 0.4) {
-            this.setState('collect');
-            return;
+        // Progi ucieczki zależą od stylu vs mobki
+        const fleeHpLow  = this.mobStyle === 'aggressive' ? 0.12 : this.mobStyle === 'neutral' ? 0.17 : 0.22;
+        const fleeHpMid  = this.mobStyle === 'aggressive' ? 0.25 : this.mobStyle === 'neutral' ? 0.30 : 0.38;
+        const fleeMobsMid = this.mobStyle === 'aggressive' ? 5   : this.mobStyle === 'neutral' ? 3    : 2;
+
+        if (hpPct < fleeHpLow && immediateN > 0) {
+            this.state = 'flee'; this.fleeTimer = 1.2 + Math.random() * 0.8; return;
+        }
+        if (hpPct < fleeHpMid && immediateN > fleeMobsMid) {
+            this.state = 'flee'; this.fleeTimer = 0.8 + Math.random() * 0.5; return;
         }
 
-        // ── 8. EKSPLORACJA ───────────────────────────────────
-        this.setState('explore');
+        // Zła strefa
+        const centerDist = Math.hypot(this.bot.x, this.bot.y);
+        const curZone     = this._getCurrentZone(centerDist);
+        const allowedZone = this._getAllowedZone();
+        // Jeśli bot jest w strefie trudniejszej niż dozwolona (mniejszy numer = trudniejsza)
+        if (curZone < allowedZone) { this.state = 'retreat'; return; }
+
+        // Leczenie
+        if (hpPct < 0.45 && immediateN === 0) { this.state = 'heal'; return; }
+
+        // XP
+        if (nearXp > 20 && hpPct > 0.5 && immediateN < 3) { this.state = 'collect'; return; }
+
+        // Walka z mobami
+        const wr = this._getWeaponRange();
+        if (this._countInRange(this.nearMonsters, wr + 60) > 0 && hpPct > 0.3) {
+            this.state = 'combat'; return;
+        }
+
+        if (nearXp > 5 && hpPct > 0.4) { this.state = 'collect'; return; }
+        this.state = 'explore';
     }
 
-    setState(newState) {
-        if (this.state !== newState) {
-            this.state = newState;
-            this.stateTimer = 0;
-            if (newState !== 'combat') {
-                // Reset destination przy zmianie stanu (nie w combat)
-                this.destination = null;
-            }
+    _decidePvp(hpPct, nearN) {
+        if (this.pvpStyle === 'defensive') {
+            return (hpPct > 0.8 && nearN === 0 && Math.random() < 0.2) ? 'fight' : 'flee';
         }
+        if (this.pvpStyle === 'neutral') {
+            if (hpPct < 0.4) return 'flee';
+            return Math.random() < 0.5 ? 'fight' : 'flee';
+        }
+        if (hpPct < 0.2) return 'flee';
+        return Math.random() < 0.85 ? 'fight' : 'ignore';
     }
 
-    // ═══════════════════════════════════════════════════════
+    // ════════════════════════════════════════
     //  WYKONANIE STANÓW
-    // ═══════════════════════════════════════════════════════
+    // ════════════════════════════════════════
 
-    executeState(dt, monsters, xpOrbs) {
-        // Dekrementuj timer ucieczki
-        if (this.fleeTimer > 0) this.fleeTimer -= dt;
-
+    _executeState(dt) {
         switch (this.state) {
-            case 'flee':     return this.executeFlee();
-            case 'retreat':  return this.executeRetreat();
-            case 'heal':     return this.executeHeal();
-            case 'combat':   return this.executeCombat(dt);
-            case 'collect':  return this.executeCollect();
-            case 'explore':  return this.executeExplore(dt);
-            default:         return this.executeExplore(dt);
+            case 'flee':      return this._flee();
+            case 'retreat':   return this._retreat();
+            case 'heal':      return this._heal();
+            case 'combat':    return this._combat();
+            case 'collect':   return this._collect();
+            case 'pvp_fight': return this._pvpFight(dt);
+            case 'pvp_flee':  return this._pvpFlee();
+            default:          return this._explore(dt);
         }
     }
 
-    // ─── UCIECZKA ────────────────────────────────────────────
-
-    executeFlee() {
+    _flee() {
         let fx = 0, fy = 0;
-
-        // Uciekaj od wszystkich bliskich wrogów (ważone dystansem)
         for (const m of this.nearMonsters) {
-            if (m.dist > 400) break;
-            const weight = (400 - m.dist) / 400;
-            const dx = this.bot.x - m.monster.x;
-            const dy = this.bot.y - m.monster.y;
-            const d = m.dist || 1;
-            fx += (dx / d) * weight * m.threat;
-            fy += (dy / d) * weight * m.threat;
+            if (m.dist > 450) break;
+            const w = Math.pow((450 - m.dist) / 450, 1.5);
+            fx += (this.bot.x - m.e.x) / (m.dist || 1) * w * m.threat;
+            fy += (this.bot.y - m.e.y) / (m.dist || 1) * w * m.threat;
         }
-
-        // Komponent do centrum (bezpieczeństwo)
         const cd = Math.hypot(this.bot.x, this.bot.y);
-        if (cd > 500) {
-            fx += (-this.bot.x / cd) * 0.4;
-            fy += (-this.bot.y / cd) * 0.4;
-        }
-
-        // Unikaj krawędzi
-        this.addEdgeAvoidance(fx, fy);
-
-        return { move: this.normalizeMove(fx, fy) };
+        if (cd > 500) { fx -= this.bot.x / cd * 0.3; fy -= this.bot.y / cd * 0.3; }
+        return { move: this._norm(fx, fy) };
     }
 
-    // ─── ODWRÓT (zła strefa) ─────────────────────────────────
-
-    executeRetreat() {
-        const recZone = this.getRecommendedZone();
-        const targetRadius = this.getZoneRadius(recZone);
-
-        // Kierunek do odpowiedniej strefy (w stronę centrum, ale nie za daleko)
+    _retreat() {
+        const allowedZone  = this._getAllowedZone();
+        const targetRadius = this._zoneOuter(allowedZone); // wycofaj się do zewnętrznej granicy dozwolonej strefy
         const cd = Math.hypot(this.bot.x, this.bot.y);
-
-        if (cd <= targetRadius + 200) {
-            // Już w dobrej strefie
-            this.setState('explore');
-            return this.executeExplore(0.016);
-        }
-
-        // Idź w stronę centrum
-        let mx = -this.bot.x / cd;
-        let my = -this.bot.y / cd;
-
-        // Unikaj wrogów po drodze
-        const avoidance = this.getMonsterAvoidance(200, 0.4);
-        mx += avoidance.x;
-        my += avoidance.y;
-
-        return { move: this.normalizeMove(mx, my) };
+        if (cd <= targetRadius + 200) { this.state = 'explore'; return this._explore(0.016); }
+        let mx = -this.bot.x / cd, my = -this.bot.y / cd;
+        const av = this._avoidance(200, 0.5);
+        return { move: this._norm(mx + av.x, my + av.y) };
     }
 
-    // ─── LECZENIE ────────────────────────────────────────────
-
-    executeHeal() {
-        const cd = Math.hypot(this.bot.x, this.bot.y);
-        const hpPct = this.bot.getHealthPercent();
-
-        // Jeśli HP jest OK, przejdź dalej
-        if (hpPct > 0.7) {
-            this.setState('explore');
-            return this.executeExplore(0.016);
-        }
-
-        // Idź do centrum
+    _heal() {
+        if (this.bot.hp / this.bot.maxHp > 0.72) { this.state = 'explore'; return this._explore(0.016); }
         let mx = 0, my = 0;
-        if (cd > 200) {
-            mx = -this.bot.x / cd;
-            my = -this.bot.y / cd;
+        const cd = Math.hypot(this.bot.x, this.bot.y);
+        if (cd > 200) { mx = -this.bot.x / cd; my = -this.bot.y / cd; }
+        const av = this._avoidance(280, 0.7);
+        const orb = this._bestOrb(200);
+        if (orb) {
+            mx += (orb.e.x - this.bot.x) / (orb.dist || 1) * 0.25;
+            my += (orb.e.y - this.bot.y) / (orb.dist || 1) * 0.25;
         }
-
-        // Silne unikanie wrogów podczas leczenia
-        const avoidance = this.getMonsterAvoidance(250, 0.6);
-        mx += avoidance.x;
-        my += avoidance.y;
-
-        // Zbieraj XP po drodze (magnez)
-        const nearOrb = this.findBestOrb(200);
-        if (nearOrb) {
-            const dx = nearOrb.orb.x - this.bot.x;
-            const dy = nearOrb.orb.y - this.bot.y;
-            const d = nearOrb.dist || 1;
-            mx += (dx / d) * 0.2;
-            my += (dy / d) * 0.2;
-        }
-
-        return { move: this.normalizeMove(mx, my) };
+        return { move: this._norm(mx + av.x, my + av.y) };
     }
 
-    // ─── WALKA ───────────────────────────────────────────────
-
-    executeCombat(dt) {
-        // Znajdź najlepszy cel
-        const target = this.selectCombatTarget();
-        if (!target) {
-            this.setState('explore');
-            return this.executeExplore(0.016);
-        }
-
-        const monster = target.monster;
-        const dist = target.dist;
-
+    _combat() {
+        const t = this._bestMonsterTarget();
+        if (!t) { this.state = 'explore'; return this._explore(0.016); }
         switch (this.combatStyle) {
-            case 'aura':     return this.combatAura(monster, dist);
-            case 'ranged':   return this.combatRanged(monster, dist);
-            case 'melee':    return this.combatMelee(monster, dist);
-            case 'assassin': return this.combatAssassin(monster, dist);
-            default:         return this.combatRanged(monster, dist);
+            case 'aura':     return this._aura(t);
+            case 'ranged':   return this._ranged(t);
+            case 'assassin': return this._assassin(t);
+            default:         return this._melee(t);
         }
     }
 
-    combatAura(monster, dist) {
-        // Aura: wchodź w grupy wrogów, ale nie za głęboko
-        // Znajdź punkt z najgęstszą grupą potworów
-        let bestX = monster.x, bestY = monster.y;
-        let maxDensity = 0;
-
-        const auraRange = this.getWeaponRange();
-
+    // ── Styl walki: AURA (idź w skupisko, ale unikaj gdy za dużo) ──
+    _aura(t) {
+        let bx = t.e.x, by = t.e.y, best = 0;
+        const ar = this._getWeaponRange();
         for (const m of this.nearMonsters.slice(0, 10)) {
-            let density = 0;
-            for (const other of this.nearMonsters) {
-                if (Math.hypot(other.monster.x - m.monster.x, other.monster.y - m.monster.y) < auraRange) {
-                    density++;
-                }
+            let d = 0;
+            for (const o of this.nearMonsters) {
+                if (Math.hypot(o.e.x - m.e.x, o.e.y - m.e.y) < ar) d++;
             }
-            if (density > maxDensity) {
-                maxDensity = density;
-                bestX = m.monster.x;
-                bestY = m.monster.y;
-            }
+            if (d > best) { best = d; bx = m.e.x; by = m.e.y; }
         }
-
-        // Nie wchodź za głęboko jeśli niskie HP
-        const hpPct = this.bot.getHealthPercent();
-        if (hpPct < 0.4 && this.countMonstersInRange(100) > 3) {
-            return this.executeFlee();
+        // Ucieknij jeśli zbyt wiele bardzo bliskich wrogów
+        if (this.bot.hp / this.bot.maxHp < 0.45 && this._countInRange(this.nearMonsters, 85) > 3) {
+            return this._flee();
         }
-
-        const dx = bestX - this.bot.x;
-        const dy = bestY - this.bot.y;
-        return { move: this.normalizeMove(dx, dy) };
+        const av = this._avoidance(90, 1.2);
+        return { move: this._norm(bx - this.bot.x + av.x, by - this.bot.y + av.y) };
     }
 
-    combatRanged(monster, dist) {
-        const idealDist = this.getWeaponRange() * 0.65;
+    // ── Styl walki: RANGED (kiting z dystansu) ──
+    _ranged(t) {
+        const ideal = this._getWeaponRange() * 0.72;
+        const { e, dist } = t;
         let mx, my;
-
-        if (dist < idealDist - 60) {
-            // Za blisko - cofaj się
-            mx = this.bot.x - monster.x;
-            my = this.bot.y - monster.y;
-        } else if (dist > idealDist + 80) {
-            // Za daleko - podejdź
-            mx = monster.x - this.bot.x;
-            my = monster.y - this.bot.y;
+        if (dist < ideal - 50) {
+            // Zbyt blisko — mocno się oddal + strafe
+            const away = Math.atan2(this.bot.y - e.y, this.bot.x - e.x);
+            const perp  = away + Math.PI / 2 * this.kiteDir;
+            mx = Math.cos(away) * 0.85 + Math.cos(perp) * 0.15;
+            my = Math.sin(away) * 0.85 + Math.sin(perp) * 0.15;
+        } else if (dist > ideal + 100) {
+            // Zbyt daleko — podejdź
+            mx = e.x - this.bot.x; my = e.y - this.bot.y;
         } else {
-            // Idealny dystans - krąż (kiting)
-            const angle = Math.atan2(monster.y - this.bot.y, monster.x - this.bot.x);
-            const perpAngle = angle + (Math.PI / 2) * this.kiteDir;
-            mx = Math.cos(perpAngle);
-            my = Math.sin(perpAngle);
+            // W zasięgu — strafe prostopadle
+            const a = Math.atan2(e.y - this.bot.y, e.x - this.bot.x) + Math.PI / 2 * this.kiteDir;
+            mx = Math.cos(a); my = Math.sin(a);
         }
-
-        // Unikaj innych wrogów
-        const avoidance = this.getMonsterAvoidance(130, 0.35);
-        mx += avoidance.x;
-        my += avoidance.y;
-
-        return { move: this.normalizeMove(mx, my) };
+        const av = this._avoidance(150, 0.4);
+        return { move: this._norm(mx + av.x, my + av.y) };
     }
 
-    combatMelee(monster, dist) {
-        const attackRange = this.getWeaponRange();
-
-        if (dist > attackRange + 30) {
-            // Podejdź
-            return { move: this.normalizeMove(monster.x - this.bot.x, monster.y - this.bot.y) };
-        }
-
-        // W zasięgu - krąż
-        const angle = Math.atan2(monster.y - this.bot.y, monster.x - this.bot.x);
-        const perpAngle = angle + (Math.PI / 2) * this.kiteDir;
-
-        let mx = Math.cos(perpAngle);
-        let my = Math.sin(perpAngle);
-
-        // Lekkie przyciąganie do celu (żeby nie oddalać się za bardzo)
-        mx += (monster.x - this.bot.x) / (dist || 1) * 0.15;
-        my += (monster.y - this.bot.y) / (dist || 1) * 0.15;
-
-        return { move: this.normalizeMove(mx, my) };
+    // ── Styl walki: MELEE (trzymaj się blisko, strafe) ──
+    _melee(t) {
+        const { e, dist } = t;
+        const wr = this._getWeaponRange();
+        if (dist > wr + 15) return { move: this._norm(e.x - this.bot.x, e.y - this.bot.y) };
+        const a = Math.atan2(e.y - this.bot.y, e.x - this.bot.x) + Math.PI / 2 * this.kiteDir;
+        let mx = Math.cos(a) * 0.6 + (e.x - this.bot.x) / (dist || 1) * 0.4;
+        let my = Math.sin(a) * 0.6 + (e.y - this.bot.y) / (dist || 1) * 0.4;
+        const av = this._avoidance(100, 0.5);
+        return { move: this._norm(mx + av.x, my + av.y) };
     }
 
-    combatAssassin(monster, dist) {
-        const weaponReady = this.isWeaponReady();
-
-        if (weaponReady && dist > 80) {
-            // Broń gotowa - szybko podejdź
-            return { move: this.normalizeMove(monster.x - this.bot.x, monster.y - this.bot.y) };
-        }
-
-        if (!weaponReady && dist < 130) {
-            // Broń na cooldown - wycofaj się
-            return { move: this.normalizeMove(this.bot.x - monster.x, this.bot.y - monster.y) };
-        }
-
-        // Krąż czekając na cooldown
-        const angle = Math.atan2(monster.y - this.bot.y, monster.x - this.bot.x);
-        const perpAngle = angle + (Math.PI / 2) * this.kiteDir;
-        return { move: { x: Math.cos(perpAngle), y: Math.sin(perpAngle) } };
+    // ── Styl walki: ASSASSIN (podejdź, uderz, cofnij) ──
+    _assassin(t) {
+        const { e, dist } = t;
+        const ready = this.bot.weapons?.[0]?.timer <= 0;
+        const av = this._avoidance(110, 0.4);
+        if (ready && dist > 80)  return { move: this._norm(e.x - this.bot.x + av.x, e.y - this.bot.y + av.y) };
+        if (!ready && dist < 130) return { move: this._norm(this.bot.x - e.x + av.x, this.bot.y - e.y + av.y) };
+        const a = Math.atan2(e.y - this.bot.y, e.x - this.bot.x) + Math.PI / 2 * this.kiteDir;
+        return { move: this._norm(Math.cos(a) + av.x, Math.sin(a) + av.y) };
     }
 
-    // ─── ZBIERANIE XP ────────────────────────────────────────
-
-    executeCollect() {
-        // Znajdź najlepszy orb (wartość/dystans)
-        const best = this.findBestOrb(500);
-
-        if (!best) {
-            this.setState('explore');
-            return this.executeExplore(0.016);
+    // ── PvP walka ──
+    _pvpFight(dt) {
+        if (!this.pvpTarget || this.pvpTarget.hp <= 0) {
+            this.pvpEngaged = false; this.pvpTarget = null;
+            this.state = 'explore'; return this._explore(dt);
         }
-
-        let mx = best.orb.x - this.bot.x;
-        let my = best.orb.y - this.bot.y;
-
-        // Lekkie unikanie wrogów
-        const avoidance = this.getMonsterAvoidance(150, 0.25);
-        mx += avoidance.x;
-        my += avoidance.y;
-
-        return { move: this.normalizeMove(mx, my) };
+        const t    = this.pvpTarget;
+        const dist = Math.hypot(t.x - this.bot.x, t.y - this.bot.y);
+        if (dist > this.pvpAggroRange * 2.5) {
+            this.pvpEngaged = false; this.pvpTarget = null;
+            this.pvpDecisionCD = 5; this.state = 'explore'; return this._explore(dt);
+        }
+        const wr = this._getWeaponRange();
+        if (dist > wr + 40) return { move: this._norm(t.x - this.bot.x, t.y - this.bot.y), pvpTarget: t };
+        const a = Math.atan2(t.y - this.bot.y, t.x - this.bot.x) + Math.PI / 2 * this.kiteDir;
+        let mx = Math.cos(a) + (t.x - this.bot.x) / (dist || 1) * 0.2;
+        let my = Math.sin(a) + (t.y - this.bot.y) / (dist || 1) * 0.2;
+        return { move: this._norm(mx, my), pvpTarget: t };
     }
 
-    // ─── EKSPLORACJA ─────────────────────────────────────────
+    // ── PvP ucieczka ──
+    _pvpFlee() {
+        let fx = 0, fy = 0;
+        if (this.pvpTarget?.hp > 0) {
+            const dx = this.bot.x - this.pvpTarget.x, dy = this.bot.y - this.pvpTarget.y;
+            const d  = Math.hypot(dx, dy) || 1;
+            fx += dx / d * 1.5; fy += dy / d * 1.5;
+        }
+        for (const p of this.nearPlayers) {
+            if (p.e === this.pvpTarget || p.dist > 300) break;
+            const w = (300 - p.dist) / 300;
+            fx += (this.bot.x - p.e.x) / (p.dist || 1) * w;
+            fy += (this.bot.y - p.e.y) / (p.dist || 1) * w;
+        }
+        const av = this._avoidance(200, 0.35);
+        if (this.pvpFleeTimer <= 0) { this.pvpTarget = null; this.pvpEngaged = false; }
+        return { move: this._norm(fx + av.x, fy + av.y) };
+    }
 
-    executeExplore(dt) {
-        // Cel: poruszaj się po mapie w odpowiedniej strefie
+    _collect() {
+        const b = this._bestOrb(500);
+        if (!b) { this.state = 'explore'; return this._explore(0.016); }
+        const av = this._avoidance(150, 0.3);
+        return { move: this._norm(b.e.x - this.bot.x + av.x, b.e.y - this.bot.y + av.y) };
+    }
+
+    _explore(dt) {
         this.destinationTimer += dt;
-
-        if (!this.destination || this.destinationTimer > 8 || this.reachedDest()) {
-            this.pickDestination();
-            this.destinationTimer = 0;
+        if (!this.destination || this.destinationTimer > 8 || this._reachedDest()) {
+            this._pickDest(); this.destinationTimer = 0;
         }
-
         let mx = this.destination.x - this.bot.x;
         let my = this.destination.y - this.bot.y;
-        const dist = Math.hypot(mx, my);
-
-        if (dist > 1) {
-            mx /= dist;
-            my /= dist;
+        const d = Math.hypot(mx, my);
+        if (d > 1) { mx /= d; my /= d; }
+        const orb = this._bestOrb(200);
+        if (orb) {
+            mx = mx * 0.6 + (orb.e.x - this.bot.x) / (orb.dist || 1) * 0.4;
+            my = my * 0.6 + (orb.e.y - this.bot.y) / (orb.dist || 1) * 0.4;
         }
-
-        // Zbieraj XP po drodze
-        const nearOrb = this.findBestOrb(200);
-        if (nearOrb) {
-            const dx = nearOrb.orb.x - this.bot.x;
-            const dy = nearOrb.orb.y - this.bot.y;
-            const d = nearOrb.dist || 1;
-            mx = mx * 0.6 + (dx / d) * 0.4;
-            my = my * 0.6 + (dy / d) * 0.4;
-        }
-
-        // Lekkie unikanie wrogów
-        const avoidance = this.getMonsterAvoidance(120, 0.2);
-        mx += avoidance.x;
-        my += avoidance.y;
-
-        return { move: this.normalizeMove(mx, my) };
+        const av = this._avoidance(120, 0.25);
+        return { move: this._norm(mx + av.x, my + av.y) };
     }
 
-    // ═══════════════════════════════════════════════════════
-    //  HELPERY
-    // ═══════════════════════════════════════════════════════
+    // ════════════════════════════════════════
+    //  PvP TARGET
+    // ════════════════════════════════════════
 
-    updateCache(monsters, xpOrbs, dt) {
-        this.cacheTimer -= dt;
-        if (this.cacheTimer > 0) return;
-        this.cacheTimer = 0.1;
-
-        // Cache potworów
-        this.nearMonsters = [];
-        for (const m of monsters) {
-            if (m.hp <= 0) continue;
-            const dist = Math.hypot(m.x - this.bot.x, m.y - this.bot.y);
-            if (dist < 800) {
-                this.nearMonsters.push({
-                    monster: m,
-                    dist,
-                    threat: this.calcThreat(m, dist)
-                });
-            }
-        }
-        this.nearMonsters.sort((a, b) => a.dist - b.dist);
-        if (this.nearMonsters.length > 20) this.nearMonsters.length = 20;
-
-        // Cache orbów
-        this.nearOrbs = [];
-        for (const o of xpOrbs) {
-            if (o.life <= 0) continue;
-            const dist = Math.hypot(o.x - this.bot.x, o.y - this.bot.y);
-            if (dist < 500) {
-                this.nearOrbs.push({ orb: o, dist, value: o.val || 1 });
-            }
-        }
-        this.nearOrbs.sort((a, b) => (b.value / (b.dist + 30)) - (a.value / (a.dist + 30)));
-        if (this.nearOrbs.length > 15) this.nearOrbs.length = 15;
-    }
-
-    checkStuck(dt) {
-        const moved = Math.hypot(this.bot.x - this.lastX, this.bot.y - this.lastY);
-        this.stuckTimer = moved < 3 ? this.stuckTimer + dt : 0;
-        this.lastX = this.bot.x;
-        this.lastY = this.bot.y;
-    }
-
-    updateMemory(dt) {
-        const now = Date.now();
-        this.dangerZones = this.dangerZones.filter(z => z.expireTime > now);
-    }
-
-    calcThreat(monster, dist) {
-        let threat = 1;
-        const hp = monster.hp || 10;
-        const dmg = monster.dmg || 5;
-        threat *= (hp / 15);
-        threat *= (dmg / 8);
-        if (dist < 100) threat *= 2.5;
-        else if (dist < 200) threat *= 1.5;
-        if (monster.isBoss) threat *= 4;
-        if (monster.isElite) threat *= 2;
-        return threat;
-    }
-
-    countMonstersInRange(range) {
-        let count = 0;
-        for (const m of this.nearMonsters) {
-            if (m.dist > range) break;
-            count++;
-        }
-        return count;
-    }
-
-    getNearXpValue() {
-        let total = 0;
-        for (const o of this.nearOrbs) {
-            total += o.value * (1 - o.dist / 500);
-        }
-        return total;
-    }
-
-    findBestOrb(maxRange) {
-        for (const o of this.nearOrbs) {
-            if (o.dist <= maxRange) return o;
+    _findPvpTarget() {
+        for (const p of this.nearPlayers) {
+            if (p.e === this.bot || p.e.hp <= 0) continue;
+            if (p.dist > this.pvpAggroRange) break;
+            return p.e;
         }
         return null;
     }
 
-    selectCombatTarget() {
-        if (this.nearMonsters.length === 0) return null;
+    // ════════════════════════════════════════
+    //  SMART UPGRADE
+    // ════════════════════════════════════════
 
-        // Priorytet:
-        // 1. Niskie HP (łatwy kill = XP)
-        // 2. Boss/elite (dużo XP)
-        // 3. Najbliższy w zasięgu broni
-
-        const range = this.getWeaponRange() + 100;
-        const inRange = this.nearMonsters.filter(m => m.dist < range);
-
-        if (inRange.length === 0) return this.nearMonsters[0];
-
-        // Szukaj łatwego killa
-        const lowHp = inRange.find(m => m.monster.hp < 20);
-        if (lowHp) return lowHp;
-
-        // Boss
-        const boss = inRange.find(m => m.monster.isBoss);
-        if (boss) return boss;
-
-        // Najbliższy
-        return inRange[0];
+    selectBestUpgrade(cards) {
+        if (!cards?.length) return null;
+        let best = [], bestScore = -1;
+        for (const c of cards) {
+            let score = c.type === 'newWeapon' ? 3 : c.type === 'newBook' ? 2.5
+                      : (UPGRADE_RARITY_VALUE[{0:'common',1:'enhanced',2:'rare',3:'legendary'}[c.rarId]] ?? 1);
+            if (score > bestScore) { bestScore = score; best = [c]; }
+            else if (score === bestScore) best.push(c);
+        }
+        return best[Math.floor(Math.random() * best.length)];
     }
 
-    getMonsterAvoidance(range, strength) {
+    // ════════════════════════════════════════
+    //  CACHE
+    // ════════════════════════════════════════
+
+    _updateCache(monsters, xpOrbs, allPlayers, dt) {
+        this.cacheTimer -= dt;
+        if (this.cacheTimer > 0) return;
+        this.cacheTimer = this.CACHE_RATE;
+
+        const bx = this.bot.x, by = this.bot.y;
+
+        this.nearMonsters = [];
+        for (let i = 0; i < monsters.length; i++) {
+            const m = monsters[i];
+            if (m.hp <= 0) continue;
+            const dist = Math.hypot(m.x - bx, m.y - by);
+            if (dist < 750) this.nearMonsters.push({ e: m, dist, threat: this._threat(m, dist) });
+        }
+        this.nearMonsters.sort((a, b) => a.dist - b.dist);
+        if (this.nearMonsters.length > 18) this.nearMonsters.length = 18;
+
+        this.nearOrbs = [];
+        for (let i = 0; i < xpOrbs.length; i++) {
+            const o = xpOrbs[i];
+            if (o.life <= 0) continue;
+            const dist = Math.hypot(o.x - bx, o.y - by);
+            if (dist < 450) this.nearOrbs.push({ e: o, dist, val: o.val || 1 });
+        }
+        this.nearOrbs.sort((a, b) => (b.val / (b.dist + 30)) - (a.val / (a.dist + 30)));
+        if (this.nearOrbs.length > 10) this.nearOrbs.length = 10;
+
+        this.nearPlayers = [];
+        const aggroR = this.pvpAggroRange * 1.5;
+        for (let i = 0; i < allPlayers.length; i++) {
+            const p = allPlayers[i];
+            if (!p || p === this.bot || p.hp <= 0) continue;
+            const dist = Math.hypot(p.x - bx, p.y - by);
+            if (dist < aggroR) this.nearPlayers.push({ e: p, dist });
+        }
+        this.nearPlayers.sort((a, b) => a.dist - b.dist);
+        if (this.nearPlayers.length > 5) this.nearPlayers.length = 5;
+    }
+
+    _threat(m, dist) {
+        let t = ((m.hp || 10) / 15) * ((m.dmg || 5) / 8);
+        if (dist < 90)  t *= 2.8;
+        else if (dist < 180) t *= 1.6;
+        if (m.isBoss)  t *= 4;
+        if (m.isElite) t *= 2;
+        return t;
+    }
+
+    _countInRange(arr, range) {
+        let c = 0;
+        for (const x of arr) { if (x.dist > range) break; c++; }
+        return c;
+    }
+
+    _xpValue() {
+        let t = 0;
+        for (const o of this.nearOrbs) t += o.val * (1 - o.dist / 450);
+        return t;
+    }
+
+    _bestOrb(maxR) {
+        for (const o of this.nearOrbs) { if (o.dist <= maxR) return o; }
+        return null;
+    }
+
+    _bestMonsterTarget() {
+        if (!this.nearMonsters.length) return null;
+        const wr  = this._getWeaponRange() + 120;
+        const inR = this.nearMonsters.filter(m => m.dist < wr);
+        if (!inR.length) return this.nearMonsters[0];
+        // Priorytet: prawie martwy → boss → najniższe HP%
+        const almostDead = inR.find(m => m.e.hp > 0 && m.e.hp <= (m.e.maxHp || 999) * 0.25);
+        if (almostDead) return almostDead;
+        const boss = inR.find(m => m.e.isBoss);
+        if (boss) return boss;
+        let best = inR[0];
+        for (const m of inR) {
+            if ((m.e.hp / (m.e.maxHp || 1)) < (best.e.hp / (best.e.maxHp || 1))) best = m;
+        }
+        return best;
+    }
+
+    // Kwadratowa waga — moby bardzo blisko odpychają MOCNO
+    _avoidance(range, strength) {
         let ax = 0, ay = 0;
         for (const m of this.nearMonsters) {
             if (m.dist > range) break;
-            const weight = (range - m.dist) / range;
-            ax += (this.bot.x - m.monster.x) / (m.dist || 1) * weight;
-            ay += (this.bot.y - m.monster.y) / (m.dist || 1) * weight;
+            const w = Math.pow((range - m.dist) / range, 2);
+            const closeMult = m.dist < 80 ? 3.0 : m.dist < 130 ? 1.6 : 1.0;
+            ax += (this.bot.x - m.e.x) / (m.dist || 1) * w * closeMult;
+            ay += (this.bot.y - m.e.y) / (m.dist || 1) * w * closeMult;
         }
         return { x: ax * strength, y: ay * strength };
     }
 
-    addEdgeAvoidance(fx, fy) {
-        const HALF = 6000;
-        const EDGE = 500;
-        if (this.bot.x > HALF - EDGE) fx -= 2;
-        if (this.bot.x < -HALF + EDGE) fx += 2;
-        if (this.bot.y > HALF - EDGE) fy -= 2;
-        if (this.bot.y < -HALF + EDGE) fy += 2;
-    }
-
-    determineCombatStyle() {
-        const weapon = this.bot.weapons?.[0];
-        if (!weapon) return 'melee';
-
+    _determineCombatStyle() {
+        const w = this.bot.weapons?.[0];
+        if (!w) return 'melee';
         const map = {
-            aura: 'aura',
+            aura: 'aura', poison: 'aura',
             bow: 'ranged', crossbow: 'ranged', lightning: 'ranged',
-            fireball: 'ranged', laser: 'ranged', meteor: 'ranged',
+            fireball: 'ranged', laser: 'ranged', meteor: 'ranged', mine: 'ranged',
             sword: 'melee', axe: 'melee',
             knife: 'assassin',
-            poison: 'aura', mine: 'ranged',
         };
-        return map[weapon.type] || 'melee';
+        return map[w.type] || 'melee';
     }
 
-    getWeaponRange() {
-        const weapon = this.bot.weapons?.[0];
-        if (!weapon) return 150;
-
-        const ranges = {
+    _getWeaponRange() {
+        const w = this.bot.weapons?.[0];
+        if (!w) return 150;
+        return {
             aura: 150, bow: 420, crossbow: 380, lightning: 380,
             fireball: 320, laser: 400, meteor: 350,
-            sword: 130, axe: 140, knife: 100,
+            sword: 130, axe: 140, knife: 110,
             poison: 140, mine: 100,
-        };
-        return ranges[weapon.type] || 200;
+        }[w.type] || 200;
     }
 
-    isWeaponReady() {
-        const w = this.bot.weapons?.[0];
-        return w ? w.timer <= 0 : false;
-    }
-
-    pickDestination() {
-        const level = this.bot.level || 1;
-        const recZone = this.getRecommendedZone();
-        const targetRadius = this.getZoneRadius(recZone);
-
-        // Losowy punkt w odpowiedniej strefie
+    _pickDest() {
+        // Wybierz pierścień odpowiedni do aktualnej dozwolonej strefy
+        const zone  = this._getAllowedZone(); // 1=najłatwiejsza (zewnątrz), 4=najtrudniejsza (centrum)
+        const inner = this._zoneInner(zone);
+        const outer = this._zoneOuter(zone);
         const angle = Math.random() * Math.PI * 2;
-        const dist = targetRadius * (0.3 + Math.random() * 0.6);
-
-        this.destination = {
-            x: Math.cos(angle) * dist,
-            y: Math.sin(angle) * dist
-        };
+        const dist  = inner + Math.random() * (outer - inner);
+        this.destination = { x: Math.cos(angle) * dist, y: Math.sin(angle) * dist };
     }
 
-    reachedDest() {
+    _reachedDest() {
         if (!this.destination) return true;
         return Math.hypot(this.destination.x - this.bot.x, this.destination.y - this.bot.y) < 150;
     }
 
-    normalizeMove(x, y) {
-        const len = Math.hypot(x, y);
-        if (len === 0) return { x: 0, y: 0 };
-        return { x: x / len, y: y / len };
+    _norm(x, y) {
+        const l = Math.hypot(x, y);
+        return l < 0.001 ? { x: 0, y: 0 } : { x: x / l, y: y / l };
     }
 
-    getRecommendedZone() {
-        const level = this.bot.level || 1;
-        if (level < 3) return 0;
-        if (level < 6) return 1;
-        if (level < 9) return 2;
-        if (level < 13) return 3;
-        return 4;
+    // ════════════════════════════════════════
+    //  STREFY
+    // ════════════════════════════════════════
+
+    // Strefa dozwolona = najwyższa strefa jaką bot może odwiedzić wg lvlu
+    // Strefa 1 (łatwa) = daleko od centrum (6000-12000)
+    // Strefa 4 (trudna) = blisko centrum (0-1500)
+    // Bot zaczyna od Strefy 1 i schodzi bliżej centrum gdy rośnie
+    _getAllowedZone() {
+        const lvl  = this.bot.level || 1;
+        const step = this.zoneLevelStep;
+        // Strefa 1 zawsze dostępna; Strefa 2 od step*1 lvl; Strefa 3 od step*2; Strefa 4 od step*3
+        if (lvl >= step * 3) return 4; // wchodzi blisko centrum
+        if (lvl >= step * 2) return 3;
+        if (lvl >= step * 1) return 2;
+        return 1; // domyślnie strefa najłatwiejsza
     }
 
-    getZoneRadius(zone) {
-        return [1200, 2500, 4000, 5500, 6000][Math.min(zone, 4)];
+    // Wewnętrzny i zewnętrzny promień każdej strefy (wg constants.js ZONES, od zewnątrz)
+    _zoneInner(zone) {
+        return { 1: 6000, 2: 4500, 3: 3000, 4: 1500, 5: 0 }[zone] ?? 6000;
+    }
+    _zoneOuter(zone) {
+        return { 1: 10000, 2: 6000, 3: 4500, 4: 3000, 5: 1500 }[zone] ?? 10000;
     }
 
-    getZone(centerDist) {
-        if (centerDist < 1500) return 0;
-        if (centerDist < 3000) return 1;
-        if (centerDist < 4500) return 2;
-        if (centerDist < 6000) return 3;
-        return 4;
+    // Zwraca numer strefy w której jest bot (1=łatwa/zewnątrz, 4=trudna/centrum)
+    _getCurrentZone(centerDist) {
+        if (centerDist >= 6000) return 1;
+        if (centerDist >= 4500) return 2;
+        if (centerDist >= 3000) return 3;
+        if (centerDist >= 1500) return 4;
+        return 5; // centrum ekstrema
     }
 
-    // ═══════════════════════════════════════════════════════
+    // ════════════════════════════════════════
     //  CALLBACKI
-    // ═══════════════════════════════════════════════════════
+    // ════════════════════════════════════════
 
     onDamageTaken(amount, source) {
-        this.lastDamageTime = Date.now();
-
-        if (source) {
-            this.dangerZones.push({
-                x: source.x || this.bot.x,
-                y: source.y || this.bot.y,
-                expireTime: Date.now() + 5000
-            });
-        }
-
-        // Automatyczna ucieczka przy dużych obrażeniach
-        const hpPct = this.bot.getHealthPercent();
+        const hpPct = this.bot.hp / this.bot.maxHp;
         if (hpPct < 0.25 && this.state !== 'flee') {
-            this.setState('flee');
-            this.fleeTimer = 2;
+            this.state = 'flee'; this.fleeTimer = 1.8;
         }
     }
 
-    onKill(victim) {
-        this.totalKills++;
-    }
+    onKill(victim)  { this.totalKills++; }
+    onDeath()       { this.totalDeaths++; this.pvpEngaged = false; this.pvpTarget = null; }
+    onXpGained()    {}
 
-    onDeath() {
-        this.totalDeaths++;
-        // Po śmierci: zwiększ ostrożność
-        this.personality.caution = Math.min(1, this.personality.caution + 0.08);
-        this.personality.aggression = Math.max(0.2, this.personality.aggression - 0.05);
-        this.survivalTime = 0;
-    }
-
-    onXpGained(amount) {
-        // Mogłoby wpływać na greed
-    }
+    getPvpTarget()     { return this.pvpTarget; }
+    getMobStyleLabel() { return this.mobStyle; }
+    getPvpStyleLabel() { return this.pvpStyle; }
 }

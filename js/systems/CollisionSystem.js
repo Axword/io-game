@@ -12,18 +12,20 @@ export class CollisionSystem {
 
             // ── Laser - specjalna kolizja prostokątna ───────
             if (b.wtype === 'laser') {
-                this.checkLaserCollisions(b, monsters, bosses, player);
+                this.checkLaserCollisions(b, monsters, bosses, player, bots);
                 continue;
             }
 
             // ── Poison - kolizja obszarowa z lingerem ───────
             if (b.wtype === 'poison') {
-                this.checkPoisonCollisions(b, monsters, bosses, player);
+                this.checkPoisonCollisions(b, monsters, bosses, player, bots);
                 continue;
             }
 
-            // ── Standardowe pociski trafiają potwory ────────
-            this.checkBulletVsMonsters(b, monsters, player, bots);
+            // ── Standardowe pociski trafiają potwory + boty AI ──
+            // Zbuduj listę celów: potwory + żywi boty (z wyjątkiem strzelającego)
+            const allTargets = this._getBulletTargets(b, monsters, bots);
+            this.checkBulletVsMonsters(b, allTargets, player, bots);
 
             // ── Pociski trafiają bossów ─────────────────────
             if (bosses) {
@@ -32,9 +34,26 @@ export class CollisionSystem {
 
             // ── Eksplozja (fireball/meteor) przy śmierci ────
             if (b.isExplosive && b.explosionRadius > 0 && b.life <= 0 && !b.hasExploded) {
-                this.handleExplosion(b, monsters, bosses, player);
+                this.handleExplosion(b, monsters, bosses, player, bots);
             }
         }
+    }
+
+    // ─── Helper: zbuduj listę celów dla pocisku ─────────────
+    _getBulletTargets(b, monsters, bots) {
+        // Jeśli właściciel pocisku to bot lub gracz (nie potwór):
+        // dolicz żywych botów jako potencjalne cele (PvP)
+        if (!b.owner || b.owner === 'monster' || b.owner === 'boss') return monsters;
+        if (!bots || bots.length === 0) return monsters;
+
+        // Zreużyj tablicę (performance)
+        if (!this._targetBuf) this._targetBuf = [];
+        this._targetBuf.length = 0;
+        for (const m of monsters) this._targetBuf.push(m);
+        for (const bot of bots) {
+            if (bot.hp > 0 && bot !== b.owner) this._targetBuf.push(bot);
+        }
+        return this._targetBuf;
     }
 
     // ─── Pociski wrogów vs gracze ────────────────────────────
@@ -53,7 +72,7 @@ export class CollisionSystem {
             if (!b.hit.has(bot)) {
                 const dist = Math.hypot(b.x - bot.x, b.y - bot.y);
                 if (dist < b.sz * 10 + 10) {
-                    bot.takeDamage(b.dmg);
+                    bot.takeDamage(b.dmg * 0.4); // boty dostają 40% obrażeń od mobów
                     b.hit.add(bot);
                     if (b.isMine) b.life = -1;
                 }
@@ -61,24 +80,39 @@ export class CollisionSystem {
         }
     }
 
-    // ─── Standardowe pociski vs potwory ──────────────────────
+    // ─── Standardowe pociski vs potwory (i boty-AI gdy są w celach) ─
 
     checkBulletVsMonsters(b, monsters, player, bots) {
         for (const m of monsters) {
             if (m.hp <= 0) continue;
             if (b.hit.has(m)) continue;
+            // Pomiń właściciela pocisku
+            if (b.owner === m) continue;
+
+            // isBot = Player entity (bot), sz jest undefined — używamy stałego rozmiaru 20
+            const targetRadius = m.isBot ? 20 : (m.sz ?? 20);
 
             const hitR = b.wtype === 'sword'
-                ? (m.sz * 0.75) + (b.sz * 60)
+                ? targetRadius * 0.75 + b.sz * 60
                 : b.wtype === 'knife'
-                ? (m.sz * 0.75) + (b.sz * 7)   // większy hitbox dla noża, zmień 8 na większą wartość
-                : (m.sz * 0.75) + (b.sz * 3);
+                ? targetRadius * 0.75 + b.sz * 7
+                : targetRadius * 0.75 + b.sz * 3;
             const dist = Math.hypot(b.x - m.x, b.y - m.y);
 
             if (dist < hitR) {
+                // Dla botów-AI: zastosuj mnożnik PvP (35%) i wywołaj ich takeDamage
+                if (m.isBot) {
+                    const pvpDmg = b.dmg * 0.35;
+                    m.takeDamage(pvpDmg, b.owner);
+                    b.hit.add(m);
+                    if (m.botAI?.onDamageTaken) m.botAI.onDamageTaken(pvpDmg, b.owner);
+                    if (!['sword', 'poison'].includes(b.wtype)) break;
+                    continue;
+                }
+
                 // Oblicz obrażenia z krytem
                 const finalDmg = this.calculateDamage(b, m);
-                m.takeDamage(finalDmg);
+                m.takeDamage(finalDmg, b.owner); // przekaż właściciela pocisku
                 this.trackDamage(b, player, finalDmg);
 
                 b.hit.add(m);
@@ -115,7 +149,7 @@ export class CollisionSystem {
 
             if (dist < hitR) {
                 const finalDmg = this.calculateDamage(b, boss);
-                boss.takeDamage(finalDmg);
+                boss.takeDamage(finalDmg, b.owner);
                 this.trackDamage(b, player, finalDmg);
 
                 b.hit.add(boss);
@@ -138,7 +172,7 @@ export class CollisionSystem {
 
     // ─── Laser - prostokątna kolizja ─────────────────────────
 
-    checkLaserCollisions(b, monsters, bosses, player) {
+    checkLaserCollisions(b, monsters, bosses, player, bots = []) {
         if (!b.owner || typeof b.owner !== 'object') return;
 
         const ownerX = b.owner.x;
@@ -154,21 +188,33 @@ export class CollisionSystem {
         for (const m of monsters) {
             if (m.hp <= 0 || b.hit.has(m)) continue;
 
-            // Przekształć pozycję potwora do układu współrzędnych lasera
             const dx = m.x - ownerX;
             const dy = m.y - ownerY;
-
-            // Obrót do lokalnego układu lasera
             const localX = dx * cosA + dy * sinA;
             const localY = -dx * sinA + dy * cosA;
 
-            // Sprawdź czy w prostokącie lasera
-            if (localX > 0 && localX < range && Math.abs(localY) < halfWidth + m.sz * 0.5) {
+            if (localX > 0 && localX < range && Math.abs(localY) < halfWidth + (m.sz ?? 20) * 0.5) {
                 const finalDmg = this.calculateDamage(b, m);
-                m.takeDamage(finalDmg);
+                m.takeDamage(finalDmg, b.owner);
                 this.trackDamage(b, player, finalDmg);
                 b.hit.add(m);
-                // Laser NIE wywołuje onHit - przechodzi przez wszystko
+            }
+        }
+
+        // Laser trafia boty (PvP, 35%)
+        if (bots && b.owner !== 'monster' && b.owner !== 'boss') {
+            for (const bot of bots) {
+                if (bot.hp <= 0 || bot === b.owner || b.hit.has(bot)) continue;
+                const dx = bot.x - ownerX;
+                const dy = bot.y - ownerY;
+                const localX = dx * cosA + dy * sinA;
+                const localY = -dx * sinA + dy * cosA;
+                if (localX > 0 && localX < range && Math.abs(localY) < halfWidth + 20 * 0.5) {
+                    const laserDmg = b.dmg * 0.35;
+                    bot.takeDamage(laserDmg, b.owner);
+                    if (bot.botAI?.onDamageTaken) bot.botAI.onDamageTaken(laserDmg, b.owner);
+                    b.hit.add(bot);
+                }
             }
         }
 
@@ -184,7 +230,7 @@ export class CollisionSystem {
 
                 if (localX > 0 && localX < range && Math.abs(localY) < halfWidth + boss.sz * 0.5) {
                     const finalDmg = this.calculateDamage(b, boss);
-                    boss.takeDamage(finalDmg);
+                    boss.takeDamage(finalDmg, b.owner);
                     this.trackDamage(b, player, finalDmg);
                     b.hit.add(boss);
                 }
@@ -194,7 +240,7 @@ export class CollisionSystem {
 
     // ─── Trucizna - obszarowa z lingerem ─────────────────────
 
-    checkPoisonCollisions(b, monsters, bosses, player) {
+    checkPoisonCollisions(b, monsters, bosses, player, bots = []) {
         const poisonRange = b.sz * 120; // sz jest ustawiane jako range/120
 
         for (const m of monsters) {
@@ -206,7 +252,7 @@ export class CollisionSystem {
                 // W chmurze trucizny
                 if (!b.hit.has(m)) {
                     const finalDmg = this.calculateDamage(b, m);
-                    m.takeDamage(finalDmg);
+                    m.takeDamage(finalDmg, b.owner);
                     this.trackDamage(b, player, finalDmg);
                     b.hit.add(m);
                 }
@@ -236,7 +282,7 @@ export class CollisionSystem {
                 if (dist < poisonRange) {
                     if (!b.hit.has(boss)) {
                         const finalDmg = this.calculateDamage(b, boss);
-                        boss.takeDamage(finalDmg);
+                        boss.takeDamage(finalDmg, b.owner);
                         this.trackDamage(b, player, finalDmg);
                         b.hit.add(boss);
                     }
@@ -247,11 +293,24 @@ export class CollisionSystem {
                 }
             }
         }
+
+        // Trucizna trafia boty (PvP, 35%)
+        if (bots && b.owner && b.owner !== 'monster' && b.owner !== 'boss') {
+            for (const bot of bots) {
+                if (bot.hp <= 0 || bot === b.owner) continue;
+                const dist = Math.hypot(bot.x - b.x, bot.y - b.y);
+                if (dist < poisonRange) {
+                    const poisonDmg = b.dmg * 0.35;
+                    bot.takeDamage(poisonDmg, b.owner);
+                    if (bot.botAI?.onDamageTaken) bot.botAI.onDamageTaken(poisonDmg, b.owner);
+                }
+            }
+        }
     }
 
     // ─── Eksplozja (fireball/meteor) ─────────────────────────
 
-    handleExplosion(b, monsters, bosses, player) {
+    handleExplosion(b, monsters, bosses, player, bots = []) {
         b.hasExploded = true;
         const radius = b.explosionRadius;
 
@@ -261,11 +320,24 @@ export class CollisionSystem {
 
             const dist = Math.hypot(m.x - b.x, m.y - b.y);
             if (dist < radius) {
-                // Falloff: im dalej od centrum, tym mniej obrażeń
                 const falloff = 1 - (dist / radius) * 0.5;
                 const explosionDmg = b.dmg * falloff;
-                m.takeDamage(explosionDmg);
+                m.takeDamage(explosionDmg, b.owner);
                 this.trackDamage(b, player, explosionDmg);
+            }
+        }
+
+        // Eksplozja trafia boty (PvP, 35%)
+        if (bots && b.owner && b.owner !== 'monster' && b.owner !== 'boss') {
+            for (const bot of bots) {
+                if (bot.hp <= 0 || bot === b.owner) continue;
+                const dist = Math.hypot(bot.x - b.x, bot.y - b.y);
+                if (dist < radius) {
+                    const falloff = 1 - (dist / radius) * 0.5;
+                    const explosionDmg = b.dmg * falloff * 0.35;
+                    bot.takeDamage(explosionDmg, b.owner);
+                    if (bot.botAI?.onDamageTaken) bot.botAI.onDamageTaken(explosionDmg, b.owner);
+                }
             }
         }
 
@@ -278,7 +350,7 @@ export class CollisionSystem {
                 if (dist < radius) {
                     const falloff = 1 - (dist / radius) * 0.5;
                     const explosionDmg = b.dmg * falloff;
-                    boss.takeDamage(explosionDmg);
+                    boss.takeDamage(explosionDmg, b.owner);
                     this.trackDamage(b, player, explosionDmg);
                 }
             }
@@ -463,7 +535,7 @@ export class CollisionSystem {
             }
 
             if (totalDamage > 0) {
-                bot.takeDamage(totalDamage);
+                bot.takeDamage(totalDamage * 0.4); // boty dostają 40% obrażeń kontaktowych od mobów
             }
         }
     }
@@ -498,7 +570,7 @@ export class CollisionSystem {
                 const collisionDist = boss.sz * 0.8 + 20;
 
                 if (dist < collisionDist) {
-                    bot.takeDamage(boss.dmg * dt * 3);
+                    bot.takeDamage(boss.dmg * dt * 3 * 0.4); // 40% od bossa
                 }
             }
         }
@@ -506,22 +578,98 @@ export class CollisionSystem {
 
     // ─── PvP: gracz vs boty ──────────────────────────────────
 
+    // ─── PvP: gracz vs boty (kontakt) ───────────────────────────
+    // Uwaga: główne obrażenia PvP są w checkPvpBulletCollisions
+    // To tylko awaryjne kill przy bardzo bliskim kontakcie
     checkPlayerBotCollisions(player, bots) {
         if (!player) return null;
+        const results = [];
 
         for (const bot of bots) {
             if (bot.hp <= 0) continue;
 
             const dist = Math.hypot(bot.x - player.x, bot.y - player.y);
-            if (dist < 30) {
-                if (player.hp > bot.hp) {
-                    bot.hp = -1;
-                    player.addXp(bot.totalXp || 0);
-                    return { killed: bot, killer: player };
+            if (dist < 28) {
+                // Zamiast instant kill — zadaj obrażenia (35% dmg)
+                // Gracz uderza bota
+                if (player.hp > 0) {
+                    const dmg = 8 * 0.35; // bazowe 8 hp kontaktowych, 35%
+                    bot.takeDamage(dmg);
+                    if (bot.hp <= 0) {
+                        player.addXp(Math.floor((bot.totalXp || 0) * 0.3));
+                        results.push({ killed: bot, killer: player });
+                    }
                 }
             }
         }
 
-        return null;
+        return results.length > 0 ? results[0] : null;
+    }
+
+    // ─── Pociski botów trafiają gracza (PvP, 35% obrażeń) ───────
+    checkBotBulletVsPlayer(bullets, player, bots) {
+        if (!player) return;
+        const PVP_MULT   = 0.35;
+        const PLAYER_R   = 22; // rozmiar gracza (size=22 w Player.js)
+        const BOT_R      = 20; // rozmiar bota
+
+        for (const b of bullets) {
+            if (b.owner === 'monster' || b.owner === 'boss') continue;
+            if (!b.owner?.isBot) continue; // tylko pociski botów
+
+            // Bot strzela w GRACZA
+            if (!b.hit.has(player) && b.owner !== player) {
+                const dist = Math.hypot(b.x - player.x, b.y - player.y);
+                const hitR = PLAYER_R + b.sz * 3;
+                if (dist < hitR) {
+                    player.takeDamage(b.dmg * PVP_MULT, b.owner);
+                    b.hit.add(player);
+                    if (b.isMine) b.life = -1;
+                }
+            }
+
+            // Bot strzela w INNEGO bota (tylko swój cel PvP)
+            const pvpTarget = b.owner?.botAI?.getPvpTarget?.();
+            if (!pvpTarget || pvpTarget.hp <= 0) continue;
+            if (b.hit.has(pvpTarget)) continue;
+            if (!pvpTarget.isBot) continue; // target musi być botem
+
+            const dist2 = Math.hypot(b.x - pvpTarget.x, b.y - pvpTarget.y);
+            const hitR2 = BOT_R + b.sz * 3;
+            if (dist2 < hitR2) {
+                pvpTarget.takeDamage(b.dmg * PVP_MULT, b.owner);
+                b.hit.add(pvpTarget);
+                if (b.isMine) b.life = -1;
+                if (pvpTarget.botAI?.onDamageTaken) pvpTarget.botAI.onDamageTaken(b.dmg * PVP_MULT, b.owner);
+            }
+        }
+    }
+
+    // ─── Pociski gracza trafiają boty (z mnożnikiem 35%) ─────────
+    checkPlayerBulletVsBots(bullets, player, bots) {
+        const PVP_MULT = 0.35;
+        const BOT_RADIUS = 20; // rozmiar bota jak w Player.js (size=20)
+
+        for (const b of bullets) {
+            // Pociski GRACZA (nie botów, nie potworów)
+            if (!b.owner || b.owner === 'monster' || b.owner === 'boss') continue;
+            if (b.owner !== player) continue;
+
+            for (const bot of bots) {
+                if (bot.hp <= 0) continue;
+                if (b.hit.has(bot)) continue;
+
+                const dist = Math.hypot(b.x - bot.x, b.y - bot.y);
+                // Hitbox: rozmiar bota + rozmiar pocisku (jak vs monster: sz*0.75 + sz*3, ale bot duży = 20)
+                const hitR = BOT_RADIUS + (b.sz * 3);
+                if (dist < hitR) {
+                    const dmg = b.dmg * PVP_MULT;
+                    bot.takeDamage(dmg, player);
+                    b.hit.add(bot);
+                    if (b.isMine) b.life = -1;
+                    if (bot.botAI?.onDamageTaken) bot.botAI.onDamageTaken(dmg, player);
+                }
+            }
+        }
     }
 }

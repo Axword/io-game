@@ -145,9 +145,9 @@ export class Player extends Entity {
         return true;
     }
 
-    update(dt, input, safeRadius, monsters, xpOrbs, upgradeSystem, weaponSystem) {
+    update(dt, input, safeRadius, monsters, xpOrbs, upgradeSystem, weaponSystem, allPlayers = []) {
         if (this.isBot) {
-            this.updateBot(dt, monsters, xpOrbs, upgradeSystem, weaponSystem);
+            this.updateBot(dt, monsters, xpOrbs, upgradeSystem, weaponSystem, allPlayers);
         } else {
             this.updatePlayer(dt, input);
         }
@@ -215,8 +215,8 @@ export class Player extends Entity {
         this.mesh.rotation.z += dt * 1.5;
     }
 
-    updateBot(dt, monsters, xpOrbs, upgradeSystem, weaponSystem) {
-        const action = this.botAI.decide(monsters, xpOrbs, dt);
+    updateBot(dt, monsters, xpOrbs, upgradeSystem, weaponSystem, allPlayers = []) {
+        const action = this.botAI.decide(monsters, xpOrbs, dt, allPlayers);
 
         if (action?.move) {
             const len = Math.hypot(action.move.x, action.move.y);
@@ -309,15 +309,28 @@ export class Player extends Entity {
     doAutoUpgrade() {
         try {
             const game = window.gameInstance;
-            if (!game) return;
+            if (!game?.upgradeSystem || !game?.weaponSystem) return;
 
             const cards = game.upgradeSystem.generateUpgradeCards(this);
-            if (cards?.length > 0) {
-                const randomCard = cards[Math.floor(Math.random() * cards.length)];
-                game.upgradeSystem.applyUpgrade(randomCard, this, game.weaponSystem);
+            if (!cards || cards.length === 0) return;
+
+            // Użyj inteligentnego wyboru AI (najlepsza rzadkość)
+            let chosen;
+            if (this.botAI?.selectBestUpgrade) {
+                chosen = this.botAI.selectBestUpgrade(cards);
+            } else {
+                chosen = cards[Math.floor(Math.random() * cards.length)];
+            }
+
+            if (chosen) {
+                game.upgradeSystem.applyUpgrade(chosen, this, game.weaponSystem);
+                // Zaktualizuj styl walki jeśli zmienił się typ broni
+                if (this.botAI && chosen.type === 'newWeapon') {
+                    this.botAI.combatStyle = this.botAI._determineCombatStyle();
+                }
             }
         } catch (e) {
-            console.warn('Bot upgrade error:', e);
+            console.warn('[BotUpgrade] Error:', e.message);
         }
     }
     getPrimaryWeapon() {

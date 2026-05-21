@@ -77,7 +77,7 @@ export class Bullet {
         return {
             mine: 8, laser: 1.5, poison: 5,
             fireball: 6, meteor: 4, sword: 999,
-            knife: 3
+            knife: 1.2
         }[wtype] || 5;
     }
 

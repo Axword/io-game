@@ -18,13 +18,14 @@ export class RoomManager {
         const usedSpawns = [playerSpawnPoint];
         const availableSpawns = SPAWN_POINTS.filter(sp => sp !== playerSpawnPoint);
         
-        const botCount = rngInt(5, 7);
+        const botCount = rngInt(9, 12);
         this.botsToSpawn = [];
         
         const realNames = [
             'xXShadowXx', 'ProGamer2024', 'NoobMaster', 'SkillIssue', 'TryHard_PL',
             'EzWin', 'Destroyer', 'Veteran99', 'TopPlayer', 'Hunter666',
-            'SniperElite', 'WarMachine', 'DarkKnight', 'Phoenix', 'Blade'
+            'SniperElite', 'WarMachine', 'DarkKnight', 'Phoenix', 'Blade',
+            'SpeedRunner', 'Lurker', 'GhostBlade', 'IronWill', 'StormRider'
         ];
         
         const usedNames = new Set();
@@ -32,8 +33,9 @@ export class RoomManager {
         for (let i = 0; i < botCount; i++) {
             const spawnPoint = availableSpawns[i % availableSpawns.length];
             const botClass = ['warrior', 'archer', 'mage', 'berserker'][Math.floor(Math.random() * 4)];
-            const botLevel = rngInt(3, 15);
-            const joinDelay = rngInt(10, 45) * 1000;
+            // Wszyscy startują od lvl 1-7 w strefie 1 (blisko centrum)
+            const botLevel = rngInt(1, 7);
+            const joinDelay = rngInt(3, 25) * 1000; // szybsze dołączanie
             
             let name;
             do {
@@ -74,13 +76,19 @@ export class RoomManager {
     }
     
     spawnBot(botData) {
+        // Zawsze spawnuj w strefie 1 — losowe miejsce w promieniu 800-1200 od centrum
+        const spawnAngle = Math.random() * Math.PI * 2;
+        const spawnDist  = 6500 + Math.random() * 1500; // Strefa 1 (najłatwiejsza): promień 6000-12000
+        const sx = Math.cos(spawnAngle) * spawnDist;
+        const sy = Math.sin(spawnAngle) * spawnDist;
+
         const bot = new Player(
             botData.class,
             { speed: 0, hp: 0, luck: 0 },
             this.scene,
             true,
-            botData.spawnPoint.x,
-            botData.spawnPoint.y
+            sx,
+            sy
         );
         
         bot.name = botData.name;
