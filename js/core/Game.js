@@ -52,13 +52,12 @@ export class Game {
         window.gameInstance = this;
     }
 
-    async start(classId, mode = 'offline', playerName = '', config = {}) {
+    async start(classId, mode = 'online', playerName = '', config = {}) {
         this.cleanup();
         this.spawnBackground();
 
         this.playerName = playerName;
         this.inRoomMode = true;
-
         if (config.difficulty) {
             this.spawnSystem.setDifficulty(config.difficulty);
         }
@@ -78,8 +77,13 @@ export class Game {
         this.weaponSystem.setupAura(this.player);
 
         if (mode === 'online') {
+            this.wsClient.on('gameState', (data) => this.handleServerState(data));
             try {
-                const roomData = await this.wsClient.createOrJoinRoom(classId);
+                const roomData = await this.wsClient.createOrJoinRoom(
+                    classId, 
+                    this.playerName, 
+                    config?.roomId || null
+                );                
                 if (roomData.online) {
                     this.roomManager.createOnlineRoom(roomData);
                     this.hud.addKillFeed(`Dołączono do pokoju ${roomData.roomId}`);
@@ -157,7 +161,30 @@ export class Game {
         const borderLine = new THREE.Line(new THREE.BufferGeometry().setFromPoints(borderPoints), borderMat);
         this.scene.add(borderLine);
     }
-
+    handleServerState(data) {
+        const { players } = data.data;
+        const myServerData = players.find(p => p.id === this.wsClient.playerId);
+        if (myServerData && this.player) {
+            this.player.x = myServerData.x;
+            this.player.y = myServerData.y;
+            this.player.hp = myServerData.hp;
+            this.player.level = myServerData.level;
+            this.camera.position.set(this.player.x, this.player.y, 10); 
+        }
+    }
+    updateOnline(dt) {
+        if (this.wsClient.connected) {
+            this.wsClient.send('input', {
+                playerId: this.wsClient.playerId,
+                data: {
+                    keys: this.inputManager.keys,
+                    mouseX: this.inputManager.mouseX,
+                    mouseY: this.inputManager.mouseY,
+                    mouseClicked: this.inputManager.mouseClicked
+                }
+            });
+        }
+    }
     update(dt) {
         if (!this.player) return null;
 

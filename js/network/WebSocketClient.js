@@ -78,20 +78,31 @@ export class WebSocketClient {
         }
     }
     
-    async createOrJoinRoom(playerClass) {
-        if (this.connected) {
-            this.send('join_room', { class: playerClass });
-            return new Promise((resolve) => {
-                this.once('room_joined', (data) => {
-                    this.roomId = data.roomId;
-                    this.playerId = data.playerId;
-                    resolve({ online: true, roomId: data.roomId, players: data.players });
-                });
+async createOrJoinRoom(playerClass, playerName, roomId = null) {
+    if (this.connected) {
+        this.send('join_room', { 
+            class: playerClass, 
+            name: playerName,
+            roomId: roomId 
+        });
+        
+        return new Promise((resolve) => {
+            const timeout = setTimeout(() => {
+                console.warn('[WS] Join room timeout - falling back to offline mode');
+                resolve({ online: false });
+            }, 3000);
+
+            this.once('room_joined', (data) => {
+                clearTimeout(timeout);
+                this.roomId = data.roomId;
+                this.playerId = data.playerId;
+                resolve({ online: true, roomId: data.roomId, players: data.players });
             });
-        } else {
-            return { online: false };
-        }
+        });
+    } else {
+        return { online: false };
     }
+}
     
     once(type, handler) {
         const wrappedHandler = (data) => {

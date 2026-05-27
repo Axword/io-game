@@ -73,28 +73,24 @@ class ArenaIO {
     }
     
     async onQuickJoin(playerName) {
-        if (this.isOnline) {
-            this.wsClient.send('quick_join', { name: playerName });
-        } else {
-            this.startOfflineGame(playerName);
-        }
+        this.currentPlayerName = playerName;
+        this.currentConfig = { difficulty: 'medium' }; // Domyślna trudność
+        this.lobbyScreen.hide();
+        this.menuScreen.show(this.permStats); // <-- Pokaż wybór klasy!
     }
-    
+
     async onJoinWithCode(playerName, code) {
-        if (this.isOnline) {
-            this.wsClient.send('join_room', { name: playerName, code });
-        } else {
-            alert('Tryb online niedostępny');
-            this.lobbyScreen.showLobby();
-        }
+        this.currentPlayerName = playerName;
+        this.currentConfig = { roomId: code }; // Przekaż kod pokoju
+        this.lobbyScreen.hide();
+        this.menuScreen.show(this.permStats); // <-- Pokaż wybór klasy!
     }
-    
+
     async onCreateRoom(playerName, config) {
-        if (this.isOnline) {
-            this.wsClient.send('create_room', { name: playerName, config });
-        } else {
-            this.startOfflineGame(playerName, config);
-        }
+        this.currentPlayerName = playerName;
+        this.currentConfig = config;
+        this.lobbyScreen.hide();
+        this.menuScreen.show(this.permStats); // <-- Pokaż wybór klasy!
     }
     
     startOfflineGame(playerName, config = {}) {
