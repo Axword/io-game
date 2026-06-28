@@ -49,7 +49,7 @@ export class GameCache {
     unlinkSocket(ws) {
         this.socketToRoom.delete(ws);
     }
-    findJoinableRoom(maxPlayers) {
+    findJoinableRoom(maxPlayers = 8) {
         const rooms = this.getAllRooms();
 
         return rooms.find(room => {
@@ -57,11 +57,11 @@ export class GameCache {
 
             const isFull = room.players.size >= maxPlayers;
             const isEnded = room.state === 'ended';
+            const isPrivate = room.privacy === 'private';
 
-            return !isFull && !isEnded;
+            return !isFull && !isEnded && !isPrivate;
         }) || null;
     }
-
     getRoomBySocket(ws) {
         const roomId = this.socketToRoom.get(ws);
         return roomId ? this.getRoom(roomId) : null;

@@ -14,11 +14,11 @@ export class SpawnSystem {
         this.difficulty = 'medium';
         this.difficultyConfig = DIFFICULTY_CONFIG;
         this.zoneLimits = [
-            { zone: 0, limit: 500, current: 0 },
-            { zone: 1, limit: 600, current: 0 },
-            { zone: 2, limit: 700, current: 0 },
-            { zone: 3, limit: 800, current: 0 },
-            { zone: 4, limit: 900, current: 0 }
+            { zone: 0, limit: 300, current: 0 },
+            { zone: 1, limit: 400, current: 0 },
+            { zone: 2, limit: 750, current: 0 },
+            { zone: 3, limit: 1200, current: 0 }, // STREFA 2
+            { zone: 4, limit: 1600, current: 0 }  // STREFA 1
         ];
     }
     setDifficulty(diff) {
@@ -58,11 +58,11 @@ export class SpawnSystem {
         const MARGIN = 800;
         const SPAWN_DISTANCE = VIEW + 200;
         const MAX_SPAWN_DISTANCE = VIEW + 800;
-        const PER_PLAYER_LIMIT = 50;
+        const PER_PLAYER_LIMIT = 250;
         
         this.updateZoneCounts(monsters);
         
-        const weights = [30, 25, 20, 15, 10];
+        const weights = [15, 18, 22, 30, 35];
         const availableZones = this.zoneLimits
             .map((limit, idx) => ({ idx, limit, weight: weights[idx] }))
             .filter(z => z.limit.current < z.limit.limit);
@@ -196,8 +196,8 @@ export class SpawnSystem {
     update(dt, monsters, gameTime, bullets, scene, targets, bosses) {
         this.monsterSpawnTimer -= dt;
         const diffMult = this.getDifficultyMultipliers();
-        const spawnDelay = (2.5 + Math.random() * 2.5) / (diffMult.spawnMult * 0.75);
-        
+        const spawnDelay = (1.5 + Math.random() * 2.0) / (diffMult.spawnMult * 0.9);
+
         if (this.monsterSpawnTimer <= 0) {
             this.updateZoneCounts(monsters);
             

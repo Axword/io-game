@@ -6,8 +6,8 @@ import { MONSTER_CONFIG } from '../shared/config/monsters.js';
 
 export const SERVER_CONFIG = {
     PORT: process.env.PORT || 3000,
-    TICK_RATE: 25,              // 25 TPS = 40 ms
-    TICK_MS: 40,
+    TICK_RATE: 20,              // 25 TPS = 40 ms
+    TICK_MS: 30,
     MAX_ROOMS: 50,
     MAX_PLAYERS_PER_ROOM: 16,
     MAX_MONSTERS_PER_ROOM: 1500,

@@ -10,7 +10,7 @@ import { WeaponSystem } from './systems/WeaponSystem.js';
 import { CollisionSystem } from './systems/CollisionSystem.js';
 import { SpawnSystem } from './systems/SpawnSystem.js';
 import { UpgradeSystem } from './systems/UpgradeSystem.js';
-import { broadcastToRoom } from './utils/network.js';
+import { send, broadcastToRoom } from './utils/network.js';
 import { rngInt } from '../shared/utils/math.js';
 
 const BOT_NAMES = [
@@ -36,7 +36,13 @@ export class GameRoom {
         this.bosses = [];            // ServerBoss[]
         this.bullets = [];           // ServerBullet[]
         this.xpOrbs = [];            // ServerXpOrb[]
+        this.maxParticipants = 8;
 
+        this.botsEnabled = options.bots !== false;
+
+        this.minBotSpawnDelay = 30;
+        this.maxBotSpawnDelay = 90;
+        this.botSpawnTimer = this.getRandomBotSpawnDelay();
         this.weaponSystem = new WeaponSystem();
         this.collisionSystem = new CollisionSystem();
         this.spawnSystem = new SpawnSystem(ZONES);
@@ -49,17 +55,29 @@ export class GameRoom {
         this.botNameIndex = 0;
         this.emptySince = 0;
     }
-
     addPlayer(ws, name, cls) {
-        const spawn = SPAWN_POINTS[Math.floor(Math.random() * SPAWN_POINTS.length)];
-        const player = new ServerPlayer(ws.id, name, cls, {}, spawn.x, spawn.y, false);
+        const point = SPAWN_POINTS[Math.floor(Math.random() * SPAWN_POINTS.length)];
+
+        const player = new ServerPlayer(
+            ws.id,
+            name,
+            cls,
+            {},
+            point.x,
+            point.y,
+            false
+        );
+
         player.ws = ws;
+        player.isBot = false;
+
         this.players.set(player.id, player);
+
         this.lastActivity = Date.now();
         this.emptySince = 0;
+
         return player;
     }
-
     removePlayer(playerId) {
         const player = this.players.get(playerId);
         if (player) {
@@ -73,6 +91,10 @@ export class GameRoom {
             if (player.ws === ws) return player;
         }
         return null;
+    }
+
+    getRandomBotSpawnDelay() {
+        return this.minBotSpawnDelay + Math.random() * (this.maxBotSpawnDelay - this.minBotSpawnDelay);
     }
 
     onPlayerDisconnect(playerId) {
@@ -111,7 +133,6 @@ export class GameRoom {
         }
         return !hasConnected;
     }
-
     start() {
         this.state = 'playing';
         this.gameTime = 0;
@@ -119,30 +140,15 @@ export class GameRoom {
         // Initial monster spawn
         const initialSpawnCount = 80;
         const allTargets = this.getAllLivingTargets();
+
         for (let i = 0; i < initialSpawnCount; i++) {
             this.spawnSystem.spawnMonster(this.monsters, allTargets);
         }
 
-        // Spawn bots if enabled
-        if (this.botsEnabled) {
-            const botCount = rngInt(9, 12);
-            for (let i = 0; i < botCount; i++) {
-                const angle = Math.random() * Math.PI * 2;
-                const dist = 6500 + Math.random() * 1500;
-                const bot = new ServerBot(
-                    Math.cos(angle) * dist,
-                    Math.sin(angle) * dist,
-                    {
-                        name: this.generateBotName(),
-                        level: rngInt(1, 7)
-                    }
-                );
-                bot.applyPendingStartUpgrades(this.upgradeSystem, this.weaponSystem);
-                this.bots.set(bot.id, bot);
-            }
-        }
+        // Boty nie spawnują się od razu.
+        // Pierwszy bot wejdzie po 30–90 sekundach przez updateBotJoining().
+        this.botSpawnTimer = this.getRandomBotSpawnDelay();
     }
-
     stop() {
         this.state = 'ended';
     }
@@ -248,6 +254,9 @@ export class GameRoom {
 
         // 10. Cleanup dead entities, spawn orbs, level ups, respawn bots
         this.cleanupAndSpawn(dt);
+        this.enforceBotLimit();
+        // 10.5 Bot joining system
+        this.updateBotJoining(dt);
 
         // 11. Broadcast state
         this.broadcastState();
@@ -263,6 +272,14 @@ export class GameRoom {
         return list;
     }
 
+    enforceBotLimit() {
+        const maxBots = this.getMaxAllowedBots();
+
+        while (this.getBotCount() > maxBots) {
+            this.removeOneBot('limit');
+        }
+    }
+    
     getFireTargetsFor(entity, allPlayers) {
         const targets = [];
         for (const m of this.monsters) if (m.hp > 0) targets.push(m);
@@ -375,44 +392,48 @@ export class GameRoom {
         for (const [botId, bot] of this.bots) {
             if (bot.hp <= 0) {
                 if (bot.botAI?.onDeath) bot.botAI.onDeath();
-                this.botRespawnQueue.push({ timer: 10, botId });
+                    this.botRespawnQueue.push({
+                        timer: this.getRandomBotSpawnDelay(),
+                        botId
+                    });
                 this.bots.delete(botId);
             }
         }
 
         // Respawn bots
+        // Respawn bots
         for (let i = this.botRespawnQueue.length - 1; i >= 0; i--) {
             const entry = this.botRespawnQueue[i];
+
             entry.timer -= dt;
+
             if (entry.timer <= 0) {
                 this.botRespawnQueue.splice(i, 1);
-                const angle = Math.random() * Math.PI * 2;
-                const dist = 6500 + Math.random() * 1500;
-                const newBot = new ServerBot(
-                    Math.cos(angle) * dist,
-                    Math.sin(angle) * dist,
-                    { name: this.generateBotName(), level: rngInt(1, 7) }
-                );
-                newBot.applyPendingStartUpgrades(this.upgradeSystem, this.weaponSystem);
-                this.bots.set(newBot.id, newBot);
+
+                // Jeśli nie ma miejsca, bot nie wraca.
+                if (!this.hasFreeParticipantSlot()) {
+                    continue;
+                }
+
+                this.spawnBot();
             }
         }
-
         // Dead players -> death screen
         for (const player of this.players.values()) {
-            if (player.hp <= 0 && !player.isDeadNotified) {
-                player.isDeadNotified = true;
-                this.sendTo(player.id, {
+            if (player.hp <= 0 && !player.deathNotified) {
+                player.hp = 0;
+                player.isDead = true;
+                player.deathNotified = true;
+
+                send(player.ws, {
                     type: 'playerDead',
-                    playerId: player.id,
                     data: {
                         level: player.level,
                         kills: player.killedMonsters || 0,
                         totalDmg: player.totalDmg || 0,
                         isInRoom: true,
-
-                        permStats: this.getPermanentStats(player.id),
-                        pendingPermPts: Math.floor(player.level / 3) + 1
+                        pendingPermPts: Math.floor(player.level / 3) + 1,
+                        player: player.toState()
                     }
                 });
             }
@@ -516,16 +537,20 @@ export class GameRoom {
         return Array.from(this.players.values()).map(p => p.toState());
     }
 
-    respawnPlayer(playerId) {
+    getRandomSpawnPoint() {
+        const point = SPAWN_POINTS[Math.floor(Math.random() * SPAWN_POINTS.length)];
+
+        return {
+            x: point.x,
+            y: point.y
+        };
+    }
+
+   respawnPlayer(playerId) {
         const player = this.players.get(playerId);
         if (!player) return null;
 
-        const spawnPoint = this.getRandomSpawnPoint
-            ? this.getRandomSpawnPoint()
-            : {
-                x: (Math.random() - 0.5) * 1000,
-                y: (Math.random() - 0.5) * 1000
-            };
+        const spawnPoint = this.getRandomSpawnPoint();
 
         player.x = spawnPoint.x;
         player.y = spawnPoint.y;
@@ -537,28 +562,156 @@ export class GameRoom {
 
         player.killedMonsters = 0;
         player.totalDmg = 0;
-
         player.pendingUpgrades = 0;
 
-        // Ważne: HP musi być ustawione po maxHp.
-        // Jeżeli permanent staty zwiększają maxHp, przelicz je tutaj.
-        if (typeof player.recalculateStats === 'function') {
-            player.recalculateStats();
+        player.damageAccumulator = 0;
+        player.lastHitBy = null;
+
+        player.regenTimer = 0;
+        player.invTimer = 2;
+
+        player.input = {
+            keys: {},
+            mouseX: 0,
+            mouseY: 0,
+            mouseClicked: false
+        };
+
+        if (typeof this.applyPermanentStats === 'function') {
+            this.applyPermanentStats(player);
         }
 
         if (!player.maxHp || player.maxHp <= 0) {
-            player.maxHp = 100;
+            player.maxHp = player.baseHp || 100;
         }
 
         player.hp = player.maxHp;
 
-        player.dead = false;
         player.isDead = false;
+        player.dead = false;
+        player.deathNotified = false;
         player.state = 'playing';
 
         return player;
     }
 
+    getHumanCount() {
+        return Array.from(this.players.values()).filter(p => !p.isBot).length;
+    }
+
+    getBotCount() {
+        return this.bots ? this.bots.size : 0;
+    }
+
+    getParticipantCount() {
+        return this.getHumanCount() + this.getBotCount();
+    }
+
+    getMaxAllowedBots() {
+        return Math.max(0, this.maxParticipants - this.getHumanCount());
+    }
+
+    canAddBot() {
+        if (!this.botsEnabled) return false;
+        if (this.state !== 'playing') return false;
+
+        return this.getBotCount() < this.getMaxAllowedBots();
+    }
+
+    removeOneBot() {
+        if (!this.bots || this.bots.size <= 0) return null;
+
+        // Usuń ostatniego bota z Mapy
+        const lastBotId = Array.from(this.bots.keys()).at(-1);
+        const bot = this.bots.get(lastBotId);
+
+        this.bots.delete(lastBotId);
+
+        console.log(`[Room ${this.id}] Bot removed to free slot: ${bot?.name || lastBotId}`);
+
+        return bot;
+    }
+
+    makeRoomForHumanPlayer() {
+        if (this.getHumanCount() >= this.maxParticipants) {
+            return false;
+        }
+
+        while (this.getParticipantCount() >= this.maxParticipants && this.getBotCount() > 0) {
+            this.removeOneBot('human_join');
+        }
+
+        return true;
+    }
+
+    ensureParticipantLimit() {
+        while (this.getParticipantCount() > this.maxParticipants && this.getBotCount() > 0) {
+            this.removeOneBot();
+        }
+    }
+
+    spawnBot() {
+        if (!this.botsEnabled) return null;
+        if (!this.hasFreeParticipantSlot()) return null;
+
+        const angle = Math.random() * Math.PI * 2;
+        const dist = 6500 + Math.random() * 1500;
+
+        const bot = new ServerBot(
+            Math.cos(angle) * dist,
+            Math.sin(angle) * dist,
+            {
+                name: this.generateBotName(),
+                level: rngInt(1, 7)
+            }
+        );
+
+        bot.applyPendingStartUpgrades(this.upgradeSystem, this.weaponSystem);
+
+        this.bots.set(bot.id, bot);
+
+        console.log(`[Room ${this.id}] Bot joined ${this.getParticipantCount()}/${this.maxParticipants}`);
+
+        return bot;
+    }
+
+    getParticipantCount() {
+        return this.getHumanCount() + this.getBotCount();
+    }
+
+    hasFreeParticipantSlot() {
+        return this.getParticipantCount() < this.maxParticipants;
+    }
+    applyPermanentStats(player) {
+        const stats = this.getPermanentStats(player.id);
+
+        const baseMaxHp = player.baseHp || 100;
+
+        player.maxHp = baseMaxHp + (stats.hp || 0);
+
+        player.dmgBonus = stats.dmg || 0;
+        player.speedBonus = stats.speed || 0;
+        player.magnetRange = 45 + (stats.magnet || 0);
+        player.regen = stats.regen || 0;
+    }
+    updateBotJoining(dt) {
+        if (!this.botsEnabled) return;
+        if (this.state !== 'playing') return;
+
+        // Jeżeli nie wolno dodać bota, resetuj timer i wyjdź.
+        if (!this.canAddBot()) {
+            this.botSpawnTimer = this.getRandomBotSpawnDelay();
+            return;
+        }
+
+        this.botSpawnTimer -= dt;
+
+        if (this.botSpawnTimer > 0) return;
+
+        this.spawnBot('timer');
+
+        this.botSpawnTimer = this.getRandomBotSpawnDelay();
+}
     getBotList() {
         return Array.from(this.bots.values()).map(b => b.toState());
     }

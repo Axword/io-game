@@ -119,29 +119,38 @@ export class Game {
         this.wsClient.onMatchEnded = (msg) => this.handleServerMatchEnded(msg);
         this.wsClient.onPlayerRespawned = (msg) => this.handleServerPlayerRespawned(msg);
         try {
-            const roomData = await this.wsClient.joinRoom({
-                name: playerName,
-                playerClass: classId,
-                roomId: config?.roomId || null,
-                difficulty: config?.difficulty || 'medium',
-                bots: config?.bots !== undefined ? config.bots : true,
+        const roomData = await this.wsClient.joinRoom({
+            name: playerName,
+            playerClass: classId,
+            roomId: config?.roomId || null,
+            difficulty: config?.difficulty || 'medium',
+            bots: config?.bots !== undefined ? config.bots : true,
+            quickJoin: !!config?.quickJoin,
+            create: !!config?.create
+        });
 
-                quickJoin: !!config?.quickJoin,
-                create: !!config?.create
+        console.log('[Game] roomData:', roomData);
+
+        if (roomData.online) {
+            this.roomManager.createOnlineRoom(roomData);
+
+            this.serverRoomId = roomData.roomId;
+
+            console.log('[Game] showing room code:', this.serverRoomId);
+
+            this.showRoomCodeOverlay(this.serverRoomId);
+
+            this.hud.addKillFeed(`Dołączono do pokoju ${roomData.roomId}`);
+            this.inRoomMode = true;
+        } else {
+            console.warn('[Game] Online join failed:', roomData.error);
+
+            this.onlineMode = false;
+            this.startOfflineMode({
+                x: this.player.x,
+                y: this.player.y
             });
-
-            if (roomData.online) {
-                this.roomManager.createOnlineRoom(roomData);
-
-                this.serverRoomId = roomData.roomId;
-                this.showRoomCodeOverlay(roomData.roomId);
-
-                this.hud.addKillFeed(`Dołączono do pokoju ${roomData.roomId}`);
-                this.inRoomMode = true;
-            } else {
-                this.onlineMode = false;
-                this.startOfflineMode({ x: this.player.x, y: this.player.y });
-            }
+        }
         } catch (e) {
             console.warn('Online mode failed, starting offline:', e);
             this.onlineMode = false;
@@ -206,7 +215,6 @@ export class Game {
     // ═══════════════════════════════════════════════════════════
     //  ONLINE STATE SYNC
     // ═══════════════════════════════════════════════════════════
-
     handleServerState(msg) {
         this.serverStateBuffer = msg.data;
         this.lastServerStateTime = performance.now();
@@ -214,61 +222,87 @@ export class Game {
 
         const myId = this.wsClient.playerId;
         const meState = msg.data.players.find(p => p.id === myId);
-
         if (meState) {
-            this.syncEntity(this.player, meState, false);
+            this.syncEntity(this.player, meState, false, true);
+
+            if (this.player.updatePosition) {
+                this.player.updatePosition(3, 2.9);
+            } else if (this.player.mesh) {
+                this.player.mesh.position.set(this.player.x, this.player.y, this.player.mesh.position.z);
+            }
+
             this.camera.position.set(this.player.x, this.player.y, 10);
         }
+        this.syncCollection(
+            this.onlinePlayerMap,
+            msg.data.players.filter(p => p.id !== myId),
+            (s) => this.createPlayerFromState(s),
+            false,
+            true
+        );
 
-        this.syncCollection(this.onlinePlayerMap, msg.data.players.filter(p => p.id !== myId), (s) => this.createPlayerFromState(s), false, true);
-        this.syncCollection(this.onlineBotMap, msg.data.bots, (s) => this.createBotFromState(s), false, false);
-        this.syncCollection(this.onlineMonsterMap, msg.data.monsters, (s) => this.createMonsterFromState(s), true, false);
-        this.syncCollection(this.onlineBulletMap, msg.data.bullets, (s) => this.createBulletFromState(s), true, false);
-        this.syncCollection(this.onlineXpOrbMap, msg.data.xpOrbs, (s) => this.createXpOrbFromState(s), true, false);
-        this.syncCollection(this.onlineBossMap, msg.data.bosses, (s) => this.createBossFromState(s), true, false);
+        this.syncCollection(this.onlineBotMap, msg.data.bots || [], (s) => this.createBotFromState(s), false, false);
+        this.syncCollection(this.onlineMonsterMap, msg.data.monsters || [], (s) => this.createMonsterFromState(s), true, false);
+        this.syncCollection(this.onlineBulletMap, msg.data.bullets || [], (s) => this.createBulletFromState(s), true, false);
+        this.syncCollection(this.onlineXpOrbMap, msg.data.xpOrbs || [], (s) => this.createXpOrbFromState(s), true, false);
+        this.syncCollection(this.onlineBossMap, msg.data.bosses || [], (s) => this.createBossFromState(s), true, false);
 
-        // Update local arrays for systems that use them (e.g. HUD)
-        this.bots = Array.from(this.onlineBotMap.values());
+        this.remotePlayers = Array.from(this.onlinePlayerMap.values());
+        this.onlineBots = Array.from(this.onlineBotMap.values());
+
+        this.bots = [
+            ...this.remotePlayers,
+            ...this.onlineBots
+        ];
+
         this.monsters = Array.from(this.onlineMonsterMap.values());
         this.bullets = Array.from(this.onlineBulletMap.values());
         this.xpOrbs = Array.from(this.onlineXpOrbMap.values());
         this.bosses = Array.from(this.onlineBossMap.values());
 
-        this.hud.update(this.player, ZONES);
-        this.hud.updateMinimap(this.player, this.monsters, this.bots, 0, this.bosses);
-        this.scoreboard.update(this.player, this.bots);
     }
-
     syncCollection(map, states, factory, hasShape, isPlayer) {
         const seen = new Set();
+
         for (const s of states) {
             seen.add(s.id);
+
             let entity = map.get(s.id);
+
             if (!entity) {
                 entity = factory(s);
+
+                entity.x = s.x;
+                entity.y = s.y;
                 entity.targetX = s.x;
                 entity.targetY = s.y;
+
                 map.set(s.id, entity);
             } else {
-                this.syncEntity(entity, s, hasShape);
+                this.syncEntity(entity, s, hasShape, false);
             }
         }
+
         for (const [id, entity] of map) {
             if (!seen.has(id)) {
                 entity.destroy && entity.destroy();
                 map.delete(id);
             }
         }
-    }
+    }    
     syncEntity(entity, state, hasShape, snap = false) {
-        if (snap || entity.x === undefined || entity.y === undefined) {
+        if (!entity || !state) return;
+
+        // Pierwsza synchronizacja albo wymuszony snap
+        if (snap) {
             entity.x = state.x;
             entity.y = state.y;
+            entity.targetX = state.x;
+            entity.targetY = state.y;
         } else {
             entity.targetX = state.x;
             entity.targetY = state.y;
         }
-
         if (state.hp !== undefined) entity.hp = state.hp;
         if (state.maxHp !== undefined) entity.maxHp = state.maxHp;
 
@@ -279,6 +313,8 @@ export class Game {
 
         if (state.killedMonsters !== undefined) entity.killedMonsters = state.killedMonsters;
         if (state.totalDmg !== undefined) entity.totalDmg = state.totalDmg;
+
+        if (state.isDead !== undefined) entity.isDead = state.isDead;
 
         if (state.class !== undefined && entity.cls !== state.class) {
             entity.cls = state.class;
@@ -348,12 +384,16 @@ export class Game {
     }
 
     handleServerPlayerDead(msg) {
-        this.state = 'dead';
-        this.deathData = msg.data || {};
+        const data = msg.data || {};
 
-        if (this.deathData.permStats) {
-            this.serverPermStats = this.deathData.permStats;
-        }
+        console.log('[Game] playerDead:', data);
+
+        this.state = 'dead';
+        this.deathData = data;
+        this.pendingUpgrades = 0;
+
+        this.upgradeCards = null;
+        window.gameInstance.upgradeCards = null;
     }
 
     handleServerPlayerKilled(msg) {
@@ -364,39 +404,37 @@ export class Game {
         this.state = 'ended';
         this.hud.showMatchEnd(msg.data);
     }
-
     handleServerPlayerRespawned(msg) {
-        const data = msg.data || {};
+        const data = msg.data || msg;
+
+        console.log('[Game] playerRespawned:', data);
 
         if (!this.player) return;
 
         this.syncEntity(this.player, data, false, true);
 
-        this.player.hp = data.hp ?? this.player.maxHp;
-        this.player.maxHp = data.maxHp ?? this.player.maxHp;
-        this.player.level = data.level ?? 1;
-        this.player.xp = data.xp ?? 0;
-        this.player.xpNeeded = data.xpNeeded ?? 100;
-        this.player.totalXp = data.totalXp ?? 0;
-        this.player.killedMonsters = data.killedMonsters ?? 0;
-        this.player.totalDmg = data.totalDmg ?? 0;
+        if (this.player.updatePosition) {
+            this.player.updatePosition(3, 2.9);
+        } else if (this.player.mesh) {
+            this.player.mesh.position.set(this.player.x, this.player.y, this.player.mesh.position.z);
+        }
 
         this.pendingUpgrades = 0;
         this.state = 'playing';
+        this.deathData = null;
+
+        window.gameInstance.upgradeCards = null;
+        this.upgradeCards = null;
 
         this.hud.addKillFeed('Odrodzony!');
-    }
-
+}
     // ═══════════════════════════════════════════════════════════
     //  MAIN LOOP
     // ═══════════════════════════════════════════════════════════
     interpolateOnlineEntities(dt) {
-        const alpha = 1 - Math.pow(0.001, dt); 
-        // im większe, tym szybciej dogania target
-
+        const alpha = Math.min(1, dt * 14);
         const interpolate = (entity) => {
             if (!entity) return;
-
             if (entity.targetX === undefined || entity.targetY === undefined) return;
 
             entity.x += (entity.targetX - entity.x) * alpha;
@@ -408,15 +446,12 @@ export class Game {
                 entity.mesh.position.set(entity.x, entity.y, entity.mesh.position.z);
             }
         };
-
-        interpolate(this.player);
-
         for (const e of this.onlinePlayerMap.values()) interpolate(e);
         for (const e of this.onlineBotMap.values()) interpolate(e);
         for (const e of this.onlineMonsterMap.values()) interpolate(e);
-        for (const e of this.onlineBulletMap.values()) interpolate(e);
-        for (const e of this.onlineXpOrbMap.values()) interpolate(e);
         for (const e of this.onlineBossMap.values()) interpolate(e);
+        for (const e of this.onlineXpOrbMap.values()) interpolate(e);
+        for (const e of this.onlineBulletMap.values()) interpolate(e);
     }
     update(dt) {
         if (!this.player) return null;
@@ -428,7 +463,7 @@ export class Game {
     }
 
     updateOnline(dt) {
-        this.inputManager.update();
+        this.inputManager.update(dt);
         this.interpolateOnlineEntities(dt);
         // Camera already follows player in handleServerState
         if (this.player) {
@@ -560,6 +595,16 @@ export class Game {
             if (b !== bot && b.hp > 0) this._botAuraTargets.push(b);
         }
         return this._botAuraTargets;
+    }
+
+
+    requestRespawn() {
+        if (!this.onlineMode || !this.wsClient) {
+            this.respawnPlayer();
+            return;
+        }
+
+        this.wsClient.sendRespawn();
     }
 
     _getBotFireTargets(bot) {
@@ -873,56 +918,59 @@ export class Game {
 
     leaveRoom() {
         this.savePlayerStatsToRoom();
+
         if (this.onlineMode && this.wsClient) {
             this.wsClient.leaveRoom();
         }
+
+        this.hideRoomCodeOverlay();
+
         this.cleanup();
         this.state = 'menu';
         this.player = null;
         this.room = null;
-        this.hideRoomCodeOverlay();
+
         if (window.onLeaveRoom) window.onLeaveRoom();
     }
-    hideRoomCodeOverlay() {
-        const el = document.getElementById('room-code-overlay');
-        if (el) el.style.display = 'none';
-    }
-    showRoomCodeOverlay(roomId) {
-        if (!roomId) return;
 
-        let el = document.getElementById('room-code-overlay');
-
-        if (!el) {
-            el = document.createElement('div');
-            el.id = 'room-code-overlay';
-            el.style.cssText = `
-                position: fixed;
-                right: 16px;
-                bottom: 16px;
-                z-index: 9999;
-                padding: 10px 14px;
-                background: rgba(0, 0, 0, 0.72);
-                color: #fff;
-                border: 1px solid rgba(255, 255, 255, 0.25);
-                border-radius: 8px;
-                font-family: 'Share Tech Mono', monospace;
-                font-size: 14px;
-                letter-spacing: 1px;
-                pointer-events: none;
-                text-align: right;
-            `;
-            document.body.appendChild(el);
+    upgradePermanentStat(id, step) {
+        if (this.onlineMode && this.wsClient) {
+            this.wsClient.sendPermUpgrade(id, step);
+            return;
         }
 
-        el.innerHTML = `
-            <div style="opacity:.65;font-size:11px;">KOD POKOJU</div>
-            <div style="font-size:20px;font-weight:bold;">${roomId}</div>
-        `;
+        if (this.room && this.playerName) {
+            this.room.upgradePermanentStat(this.playerName, id, step);
+        }
+    }
+    showRoomCodeOverlay(roomId) {
+        const overlay = document.getElementById('room-code-overlay');
+        const value = document.getElementById('room-code-value');
 
-        el.style.display = 'block';
+        if (!overlay || !value) {
+            console.warn('[RoomCode] overlay elements not found');
+            return;
+        }
+
+        if (!roomId) {
+            overlay.style.display = 'none';
+            value.textContent = '------';
+            return;
+        }
+
+        value.textContent = roomId;
+        overlay.style.display = 'block';
+
+        console.log('[RoomCode] visible:', roomId);
     }
 
+    hideRoomCodeOverlay() {
+        const overlay = document.getElementById('room-code-overlay');
+        const value = document.getElementById('room-code-value');
 
+        if (value) value.textContent = '------';
+        if (overlay) overlay.style.display = 'none';
+    }
     cleanup() {
         [this.player, ...this.monsters, ...this.bullets, ...this.xpOrbs, ...this.bots, ...this.bosses]
             .filter(e => e).forEach(e => e.destroy && e.destroy());

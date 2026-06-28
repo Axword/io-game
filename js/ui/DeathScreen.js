@@ -116,6 +116,7 @@ export class DeathScreen {
             `;
             el.addEventListener('click', () => {
                 if (this.pendingPermPts <= 0) return;
+                permStats[pd.id] = (permStats[pd.id] || 0) + pd.step;
                 onPermUpgrade(pd.id, pd.step);
                 this.pendingPermPts--;
                 this.buildPermCards(permStats, onPermUpgrade);

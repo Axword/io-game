@@ -87,16 +87,28 @@ class ArenaIO {
 
     async onJoinWithCode(playerName, code) {
         this.currentPlayerName = playerName;
-        this.currentConfig = { roomId: code }; // Przekaż kod pokoju
+
+        this.currentConfig = {
+            roomId: String(code || '').trim().toUpperCase(),
+            quickJoin: false,
+            create: false
+        };
+
         this.lobbyScreen.hide();
-        this.menuScreen.show(this.permStats); // <-- Pokaż wybór klasy!
+        this.menuScreen.show(this.permStats);
     }
 
     async onCreateRoom(playerName, config) {
         this.currentPlayerName = playerName;
-        this.currentConfig = config;
+
+        this.currentConfig = {
+            ...config,
+            create: true,
+            quickJoin: false
+        };
+
         this.lobbyScreen.hide();
-        this.menuScreen.show(this.permStats); // <-- Pokaż wybór klasy!
+        this.menuScreen.show(this.permStats);
     }
     
     startOfflineGame(playerName, config = {}) {
@@ -175,15 +187,6 @@ class ArenaIO {
         }
     }
 
-    requestRespawn() {
-        if (!this.onlineMode || !this.wsClient) {
-            this.respawnPlayer();
-            return;
-        }
-
-        this.wsClient.sendRespawn();
-
-    }
 
     startLoop() {
         const loop = (timestamp) => {

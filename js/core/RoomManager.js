@@ -18,7 +18,7 @@ export class RoomManager {
         const usedSpawns = [playerSpawnPoint];
         const availableSpawns = SPAWN_POINTS.filter(sp => sp !== playerSpawnPoint);
         
-        const botCount = rngInt(9, 12);
+        const botCount = rngInt(0, 1);
         this.botsToSpawn = [];
         
         const realNames = [

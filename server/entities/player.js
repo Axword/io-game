@@ -66,7 +66,8 @@ export class ServerPlayer {
         this.isBot = isBot;
         this.ws = null;
         this.disconnectedAt = 0;
-
+        this.isDead = false;
+        this.deathNotified = false;
         this.applyClassBaseBonuses();
         this.hp = this.maxHp;
     }
@@ -225,19 +226,30 @@ export class ServerPlayer {
 
     getPrimaryWeapon() {
         return this.weapons.find(w => w !== null) || null;
-    }
-
+     }
     toState() {
         return {
             id: this.id,
             name: this.name,
+
             x: this.x,
             y: this.y,
+
             hp: Math.round(this.hp),
             maxHp: Math.round(this.maxHp),
+            isDead: this.isDead || this.hp <= 0,
+
             level: this.level,
-            class: this.cls,
-            isDead: this.hp <= 0
+            xp: Math.floor(this.xp || 0),
+            xpNeeded: Math.floor(this.xpNeeded || 100),
+            totalXp: Math.floor(this.totalXp || 0),
+
+            killedMonsters: this.killedMonsters || 0,
+            totalDmg: Math.floor(this.totalDmg || 0),
+
+            pendingUpgrades: this.pendingUpgrades || 0,
+
+            class: this.cls
         };
     }
 }

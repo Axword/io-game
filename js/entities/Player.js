@@ -180,7 +180,12 @@ export class Player extends Entity {
             this.damageAccumulator = 0;
 
             if (this.hp <= 0) {
-                this.tryRevive();
+                const revived = this.tryRevive();
+
+                if (!revived && this.hp <= 0) {
+                    this.hp = 0;
+                    this.isDead = true;
+                }
             }
         }
 
@@ -191,6 +196,18 @@ export class Player extends Entity {
                 w.timer -= dt * cdTickMultiplier;
             }
         }
+    }
+
+    tryRevive() {
+        if (this.hp > 0 || this.revives <= 0) return false;
+
+        this.revives--;
+        this.hp = Math.max(1, this.maxHp * 0.5);
+        this.invTimer = 2;
+        this.isDead = false;
+        this.deathNotified = false;
+
+        return true;
     }
 
     updatePlayer(dt, input) {

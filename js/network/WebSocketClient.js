@@ -88,7 +88,23 @@ export class WebSocketClient {
     }
 
     handleMessage(data) {
-        // Built-in event dispatch
+        if (data.type !== 'gameState') {
+            console.log('[WS RECV]', data);
+        }
+
+        if (data.type === 'gameState') {
+            if (!this._gameStateDebugAt || performance.now() - this._gameStateDebugAt > 1000) {
+                this._gameStateDebugAt = performance.now();
+
+                console.log('[WS RECV gameState]', {
+                    players: data.data?.players?.length,
+                    bots: data.data?.bots?.length,
+                    monsters: data.data?.monsters?.length,
+                    roomId: this.roomId,
+                    playerId: this.playerId
+                });
+            }
+        }       
         const callbackName = 'on' + data.type.charAt(0).toUpperCase() + data.type.slice(1);
         if (this[callbackName]) {
             try { this[callbackName](data); } catch (e) { console.error(e); }
@@ -110,7 +126,7 @@ export class WebSocketClient {
     }) {
         if (!this.connected) return { online: false };
 
-        this.send('joinRoom', {
+        const payload = {
             name,
             class: playerClass,
             roomId,
@@ -118,27 +134,40 @@ export class WebSocketClient {
             bots,
             quickJoin,
             create
-        });
+        };
+
+        console.log('[WS] joinRoom payload:', payload);
+
+        this.send('joinRoom', payload);
 
         return new Promise((resolve) => {
             const timeout = setTimeout(() => {
                 console.warn('[WS] Join room timeout - falling back to offline mode');
-                resolve({ online: false });
+                resolve({ online: false, error: 'timeout' });
             }, 3000);
 
             this.once('roomJoined', (data) => {
                 clearTimeout(timeout);
+
                 this.roomId = data.roomId;
                 this.playerId = data.playerId;
-                resolve({ online: true, ...data });
+
+                console.log('[WS] roomJoined:', data);
+
+                resolve({
+                    online: true,
+                    ...data
+                });
             });
 
-            this.once('error', (data) => {
+            this.once('error', (err) => {
                 clearTimeout(timeout);
-                console.warn('[WS] Join room error:', data);
+
+                console.warn('[WS] joinRoom error:', err);
+
                 resolve({
                     online: false,
-                    error: data?.data?.message || 'Join room failed'
+                    error: err?.data?.message || 'Join failed'
                 });
             });
         });
@@ -174,7 +203,16 @@ export class WebSocketClient {
 
         this.send('respawn', {});
     }
-    
+
+    sendPermUpgrade(id, step) {
+        if (!this.connected) return;
+
+        this.send('permUpgrade', {
+            id,
+            step
+        });
+    }    
+
     disconnect() {
         if (this.ws) {
             this.ws.close();

@@ -35,25 +35,7 @@ export class Room {
         return this.getPlayerStats(playerId).permanentStats;
     }
     
-    upgradePermanentStatupgradePermanentStat(id, step) {
-        if (this.onlineMode && this.wsClient) {
-            this.wsClient.sendPermUpgrade(id, step);
-            return;
-        }
 
-        if (this.room && this.playerName) {
-            this.room.upgradePermanentStat(this.playerName, id, step);
-        }
-    }
-
-    sendPermUpgrade(id, step) {
-        if (!this.connected || !this.playerId) return;
-
-        this.send('permUpgrade', {
-            id,
-            step
-        });
-    }
 
     getDuration() {
         return (Date.now() - this.createdAt) / 1000;

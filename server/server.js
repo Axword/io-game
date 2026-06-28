@@ -66,9 +66,9 @@ function handleMessage(ws, msg) {
     const { type } = msg;
     const payload = msg.data ?? msg;
 
-    console.log('[WS] message:', type, payload);
 
     switch (type) {
+    
         case 'joinRoom':
             handleJoinRoom(ws, payload);
             break;
@@ -80,7 +80,6 @@ function handleMessage(ws, msg) {
         case 'leaveRoom':
             handleLeaveRoom(ws);
             break;
-
         case 'input':
             handleInput(ws, payload);
             break;
@@ -102,6 +101,8 @@ function handleMessage(ws, msg) {
     }
 }
 function handleJoinRoom(ws, data) {
+    console.log('[WS] handleJoinRoom data:', data);
+
     const name = data?.name || 'Player';
     const cls = data?.class || 'warrior';
     const difficulty = data?.difficulty || SERVER_CONFIG.DEFAULT_DIFFICULTY;
@@ -110,23 +111,28 @@ function handleJoinRoom(ws, data) {
     const quickJoin = !!data?.quickJoin;
     const create = !!data?.create;
 
-    let roomId = data?.roomId;
+    let roomId = data?.roomId
+        ? String(data.roomId).trim().toUpperCase()
+        : null;
+
     let room = null;
 
+    // 1. Join przez konkretny kod
     if (roomId) {
-        roomId = String(roomId).trim().toUpperCase();
         room = gameCache.getRoom(roomId);
 
         if (!room && !create) {
             send(ws, {
                 type: 'error',
-                data: { message: 'Pokój o takim kodzie nie istnieje.' }
+                data: {
+                    message: 'Pokój o takim kodzie nie istnieje.'
+                }
             });
             return;
         }
     }
 
-    // QUICK JOIN: najpierw szukamy istniejącego pokoju
+    // 2. Quick join — szuka istniejącego publicznego pokoju
     if (!room && quickJoin) {
         room = gameCache.findJoinableRoom
             ? gameCache.findJoinableRoom(SERVER_CONFIG.MAX_PLAYERS_PER_ROOM)
@@ -134,35 +140,48 @@ function handleJoinRoom(ws, data) {
 
         if (room) {
             roomId = room.id;
-            console.log(`[WS] Quick join found room: ${roomId}`);
+            console.log('[WS] QuickJoin found room:', roomId);
         }
     }
 
-    // CREATE ROOM: tylko gdy jawnie tworzymy albo quickJoin nie znalazł niczego
+    // 3. Tworzenie pokoju
     if (!room) {
         if (!create && !quickJoin) {
             send(ws, {
                 type: 'error',
-                data: { message: 'Nie można utworzyć pokoju w tym trybie.' }
+                data: {
+                    message: 'Nie można utworzyć pokoju w tym trybie.'
+                }
             });
             return;
         }
 
         roomId = roomId || generateRoomCode();
-        room = new GameRoom(roomId, { difficulty, bots });
+
+        room = new GameRoom(roomId, {
+            difficulty,
+            bots
+        });
+
         gameCache.saveRoom(roomId, room);
 
-        console.log(`[WS] Created new room: ${roomId}`);
+        console.log('[WS] Created room:', roomId);
     }
 
-    if (room.players.size >= SERVER_CONFIG.MAX_PLAYERS_PER_ROOM) {
+    // Jeśli ludzi jest już 8, nie wpuszczamy.
+    if (room.getHumanCount && room.getHumanCount() >= room.maxParticipants) {
         send(ws, {
             type: 'error',
-            data: { message: 'Room is full' }
+            data: { message: 'Pokój jest pełny.' }
         });
         return;
     }
 
+    // Jeśli limit zajmują boty, usuń jednego bota.
+    if (room.makeRoomForHumanPlayer) {
+        room.makeRoomForHumanPlayer();
+    }
+    // 5. Dodanie gracza
     const player = room.addPlayer(ws, name, cls);
     gameCache.linkSocket(ws, room.id);
 
@@ -172,6 +191,9 @@ function handleJoinRoom(ws, data) {
         playerId: player.id,
         state: room.state,
         data: {
+            roomId: room.id,
+            playerId: player.id,
+            state: room.state,
             players: room.getPlayerList(),
             bots: room.getBotList(),
             difficulty: room.difficulty,
@@ -277,9 +299,9 @@ function handleRespawn(ws) {
     const player = room.getPlayerBySocket(ws);
     if (!player) return;
 
-    const respawnedPlayer = room.respawnPlayer(player.id);
+    const respawned = room.respawnPlayer(player.id);
 
-    if (!respawnedPlayer) {
+    if (!respawned) {
         send(ws, {
             type: 'error',
             data: { message: 'Respawn failed' }
@@ -289,30 +311,19 @@ function handleRespawn(ws) {
 
     send(ws, {
         type: 'playerRespawned',
-        data: room.serializePlayer
-            ? room.serializePlayer(respawnedPlayer)
-            : {
-                id: respawnedPlayer.id,
-                name: respawnedPlayer.name,
-                class: respawnedPlayer.cls,
-
-                x: respawnedPlayer.x,
-                y: respawnedPlayer.y,
-
-                hp: respawnedPlayer.hp,
-                maxHp: respawnedPlayer.maxHp,
-
-                level: respawnedPlayer.level,
-                xp: respawnedPlayer.xp,
-                xpNeeded: respawnedPlayer.xpNeeded,
-                totalXp: respawnedPlayer.totalXp,
-
-                killedMonsters: respawnedPlayer.killedMonsters || 0,
-                totalDmg: respawnedPlayer.totalDmg || 0
-            }
+        data: respawned.toState()
     });
-}
 
+    broadcastToRoom(room, {
+        type: 'playerRespawnedPublic',
+        data: {
+            playerId: respawned.id,
+            name: respawned.name,
+            x: respawned.x,
+            y: respawned.y
+        }
+    }, ws);
+}
 
 function generateRoomCode() {
     const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
