@@ -536,23 +536,11 @@ export class GameRoom {
         const bulletRange = 1800;
         const orbRange = 1400;
         const bossRange = 3000;
-        const playerRange = 2500;
 
         const players = Array.from(this.players.values())
-            .filter(p => {
-                if (p.id === player.id) return true;
-                const dx = p.x - player.x;
-                const dy = p.y - player.y;
-                return dx * dx + dy * dy <= playerRange * playerRange;
-            })
             .map(p => p.toState());
 
         const bots = Array.from(this.bots.values())
-            .filter(b => {
-                const dx = b.x - player.x;
-                const dy = b.y - player.y;
-                return dx * dx + dy * dy <= playerRange * playerRange;
-            })
             .map(b => b.toState());
 
         return {
