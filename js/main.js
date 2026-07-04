@@ -61,8 +61,7 @@ class ArenaIO {
     }
     async initNetwork() {
         try {
-            await this.wsClient.connect(`https://vamps-io.onrender.com:10000`);
-
+            await this.wsClient.connect("wss://vamps-io.onrender.com");
             this.isOnline = true;
 
             console.log('[Network] Connected - multiplayer available');
