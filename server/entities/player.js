@@ -249,7 +249,23 @@ export class ServerPlayer {
 
             pendingUpgrades: this.pendingUpgrades || 0,
 
-            class: this.cls
+            class: this.cls,
+            weapons: this.weapons.map(w => w ? {
+                type: w.type,
+                timer: w.timer || 0,
+                upgrades: w.upgrades || {},
+                upgradeTypes: w.upgradeTypes || [],
+                appliedUpgrades: Array.from(w.appliedUpgrades || []),
+                upgradeApplyCount: w.upgradeApplyCount || {},
+                stats: w.stats || {}
+            } : null),
+
+            books: this.books.map(b => b ? {
+                type: b.type,
+                level: b.level || 1,
+                appliedUpgrades: Array.from(b.appliedUpgrades || []),
+                stats: b.stats || {}
+            } : null)
         };
     }
 }

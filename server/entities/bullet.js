@@ -165,13 +165,30 @@ export class ServerBullet {
     toState() {
         return {
             id: this.id,
+
             x: this.x,
             y: this.y,
-            vx: this.vx,
-            vy: this.vy,
+            vx: this.vx || 0,
+            vy: this.vy || 0,
+
             wtype: this.wtype,
-            sz: this.sz,
-            col: this.col
+            sz: this.sz || 1,
+            col: this.col,
+
+            life: this.life,
+
+            ownerId: this.ownerId || null,
+
+            angle: this.angle,
+            rotation: this.rotation,
+
+            pierce: this.pierce || 0,
+            bounces: this.bounces || 0,
+
+            laserAngle: this.laserAngle,
+            laserRange: this.laserRange,
+            laserWidth: this.laserWidth
         };
+
     }
 }

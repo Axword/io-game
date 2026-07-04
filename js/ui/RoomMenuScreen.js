@@ -23,9 +23,7 @@ export class RoomMenuScreen {
         const duration = this.room.getFormattedDuration();
         const code = this.room.roomId;
         const diff = this.getDifficultyLabel(this.room.difficulty);
-        
-        console.log(`Pokój: ${code} | Czas: ${duration} | Trudność: ${diff}`);
-    }
+        }
     
     getDifficultyLabel(difficulty) {
         const labels = {

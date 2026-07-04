@@ -54,6 +54,10 @@ export class GameRoom {
         this.botRespawnQueue = [];
         this.botNameIndex = 0;
         this.emptySince = 0;
+        this.fxEvents = [];
+        this.nextFxId = 1;
+        this.stateSendTimer = 0;
+        this.stateSendRate = 1 / 15; // 15 razy/s
     }
     addPlayer(ws, name, cls) {
         const point = SPAWN_POINTS[Math.floor(Math.random() * SPAWN_POINTS.length)];
@@ -138,7 +142,7 @@ export class GameRoom {
         this.gameTime = 0;
 
         // Initial monster spawn
-        const initialSpawnCount = 80;
+        const initialSpawnCount = 100;
         const allTargets = this.getAllLivingTargets();
 
         for (let i = 0; i < initialSpawnCount; i++) {
@@ -233,8 +237,14 @@ export class GameRoom {
             const targets = this.getFireTargetsFor(p, allPlayers);
             for (let i = 0; i < 4; i++) {
                 if (p.weapons[i]) {
-                    this.weaponSystem.fireWeapon(p, i, targets, this.bullets, p.id);
-                }
+                    this.weaponSystem.fireWeapon(
+                        p,
+                        i,
+                        targets,
+                        this.bullets,
+                        p.id,
+                        this
+                    );                }
             }
         }
 
@@ -259,8 +269,12 @@ export class GameRoom {
         this.updateBotJoining(dt);
 
         // 11. Broadcast state
-        this.broadcastState();
+        this.stateSendTimer += dt;
 
+        if (this.stateSendTimer >= this.stateSendRate) {
+            this.stateSendTimer = 0;
+            this.broadcastState();
+        }
         // 12. Remove timed-out disconnected players
         this.removeTimedOutPlayers();
     }
@@ -494,25 +508,70 @@ export class GameRoom {
 
         return stats;
     }
-    
     broadcastState() {
-        const data = {
+        for (const player of this.players.values()) {
+            if (!player.ws || player.ws.readyState !== 1) continue;
+
+            const state = this.buildStateForPlayer(player);
+
+            try {
+                player.ws.send(JSON.stringify(state));
+            } catch (e) {
+                console.error('[Room] state send failed:', e.message);
+            }
+        }
+    }
+    filterNear(entity, list, range) {
+        const r2 = range * range;
+
+        return list.filter(o => {
+            const dx = o.x - entity.x;
+            const dy = o.y - entity.y;
+
+            return dx * dx + dy * dy <= r2;
+        });
+    }
+    buildStateForPlayer(player) {
+        const monsterRange = 1800;
+        const bulletRange = 1800;
+        const orbRange = 1400;
+        const bossRange = 3000;
+        const playerRange = 2500;
+
+        const players = Array.from(this.players.values())
+            .filter(p => {
+                if (p.id === player.id) return true;
+                const dx = p.x - player.x;
+                const dy = p.y - player.y;
+                return dx * dx + dy * dy <= playerRange * playerRange;
+            })
+            .map(p => p.toState());
+
+        const bots = Array.from(this.bots.values())
+            .filter(b => {
+                const dx = b.x - player.x;
+                const dy = b.y - player.y;
+                return dx * dx + dy * dy <= playerRange * playerRange;
+            })
+            .map(b => b.toState());
+
+        return {
             type: 'gameState',
             room: this.id,
             t: this.gameTime,
             data: {
                 gameTime: this.gameTime,
-                players: Array.from(this.players.values()).map(p => p.toState()),
-                bots: Array.from(this.bots.values()).map(b => b.toState()),
-                monsters: this.monsters.map(m => m.toState()),
-                bullets: this.bullets.map(b => b.toState()),
-                xpOrbs: this.xpOrbs.map(o => o.toState()),
-                bosses: this.bosses.map(b => b.toState())
+
+                players,
+                bots,
+
+                monsters: this.filterNear(player, this.monsters, monsterRange).map(m => m.toState()),
+                bullets: this.filterNear(player, this.bullets, bulletRange).map(b => b.toState()),
+                xpOrbs: this.filterNear(player, this.xpOrbs, orbRange).map(o => o.toState()),
+                bosses: this.filterNear(player, this.bosses, bossRange).map(b => b.toState())
             }
         };
-        broadcastToRoom(this, data);
     }
-
     sendTo(playerId, data) {
         const player = this.players.get(playerId);
         if (player && player.ws && player.ws.readyState === 1) {
@@ -522,6 +581,18 @@ export class GameRoom {
                 console.error('[Room] sendTo failed:', e.message);
             }
         }
+    }
+
+    emitFx(fx) {
+        const event = {
+            id: `fx_${Date.now()}_${Math.random().toString(36).slice(2)}`,
+            ...fx
+        };
+
+        broadcastToRoom(this, {
+            type: 'fx',
+            data: event
+        });
     }
 
     removeTimedOutPlayers() {
@@ -665,13 +736,8 @@ export class GameRoom {
                 level: rngInt(1, 7)
             }
         );
-
         bot.applyPendingStartUpgrades(this.upgradeSystem, this.weaponSystem);
-
         this.bots.set(bot.id, bot);
-
-        console.log(`[Room ${this.id}] Bot joined ${this.getParticipantCount()}/${this.maxParticipants}`);
-
         return bot;
     }
 
@@ -694,6 +760,13 @@ export class GameRoom {
         player.magnetRange = 45 + (stats.magnet || 0);
         player.regen = stats.regen || 0;
     }
+    addFxEvent(fx) {
+        this.fxEvents.push({
+            id: `fx_${this.nextFxId++}`,
+            ...fx
+        });
+    }
+
     updateBotJoining(dt) {
         if (!this.botsEnabled) return;
         if (this.state !== 'playing') return;

@@ -269,10 +269,54 @@ export class Bullet {
         this.scene.add(this.glow);
     }
 
+    updatePosition() {
+        if (!this.mesh) return;
+        this.mesh.position.set(this.x, this.y, 2.5);
+        switch (this.wtype) {
+            case 'bow':
+            case 'knife': {
+                this.mesh.rotation.z = Math.atan2(this.vy || 0, this.vx || 1);
+                break;
+            }
+
+            case 'axe': {
+                this.mesh.rotation.z = Date.now() * 0.012;
+                break;
+            }
+            case 'sword': {
+                this.mesh.rotation.z = this.rotation ?? this.angle ?? (Date.now() * 0.006);
+                break;
+            }
+            case 'laser': {
+                this.mesh.rotation.z = this.laserAngle || 0;
+                break;
+            }
+            case 'meteor':
+            case 'fireball':
+            case 'mine': {
+                this.mesh.rotation.z = this.rotation ?? this.mesh.rotation.z;
+                break;
+            }
+        }
+        if (this.outline) {
+            this.outline.position.set(this.x, this.y, 2.4);
+            this.outline.rotation.z = this.mesh.rotation.z;
+        }
+
+        if (this.whiteOutline) {
+            this.whiteOutline.position.set(this.x, this.y, 2.35);
+            this.whiteOutline.rotation.z = this.mesh.rotation.z;
+        }
+
+        if (this.glow) {
+            this.glow.position.set(this.x, this.y, 2.3);
+            this.glow.rotation.z = this.mesh.rotation.z;
+        }
+    }
+
+
     update(dt) {
         this.animTime += dt;
-
-        // ── Rehit timer (sword, poison) ─────────────────────
         if (this.rehitInterval > 0) {
             this.rehitTimer -= dt;
             if (this.rehitTimer <= 0) {
@@ -280,8 +324,6 @@ export class Bullet {
                 this.rehitTimer = this.rehitInterval;
             }
         }
-
-        // ── Poison linger ───────────────────────────────────
         if (this.lingerDmg > 0 && this.lingeredEntities.size > 0) {
             for (const [entity, timer] of this.lingeredEntities) {
                 const newTimer = timer - dt;
@@ -296,8 +338,6 @@ export class Bullet {
                 }
             }
         }
-
-        // ── Ruch ────────────────────────────────────────────
         if (this.trajectory) {
             this.updateTrajectory(dt);
         }
@@ -312,7 +352,6 @@ export class Bullet {
             this.y = this.owner.y + Math.sin(angle) * orbit;
         }
         else if (this.wtype === 'laser' && this.owner && typeof this.owner === 'object' && this.owner.x !== undefined) {
-            // Laser: pozycja = gracz, obrócony w kierunku strzału
             const range = this.laserRange || 350;
             const halfRange = range / 2;
             this.x = this.owner.x + Math.cos(this.laserAngle) * halfRange;

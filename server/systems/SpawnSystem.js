@@ -12,11 +12,11 @@ export class SpawnSystem {
         this.difficulty = 'medium';
         this.difficultyConfig = DIFFICULTY_CONFIG;
         this.zoneLimits = [
-            { zone: 0, limit: 500, current: 0 },
-            { zone: 1, limit: 600, current: 0 },
-            { zone: 2, limit: 700, current: 0 },
-            { zone: 3, limit: 800, current: 0 },
-            { zone: 4, limit: 900, current: 0 }
+            { zone: 0, limit: 250, current: 0 },
+            { zone: 1, limit: 300, current: 0 },
+            { zone: 2, limit: 500, current: 0 },
+            { zone: 3, limit: 1200, current: 0 },
+            { zone: 4, limit: 1300, current: 0 }
         ];
     }
 

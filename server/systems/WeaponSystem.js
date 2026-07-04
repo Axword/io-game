@@ -29,7 +29,7 @@ export class WeaponSystem {
         return base * (upgrade || 1) * globalMult;
     }
 
-    fireWeapon(entity, slotIdx, monsters, bullets, ownerId) {
+    fireWeapon(entity, slotIdx, targets, bullets, ownerId, room = null) {
         const w = entity.weapons[slotIdx];
         if (!w || w.timer > 0) return;
 
@@ -40,15 +40,33 @@ export class WeaponSystem {
         w.timer = wd.cooldown / Math.max(0.1, atkSpd);
 
         switch (w.type) {
-            case 'bow': this.fireBow(entity, w, monsters, bullets, ownerId); break;
-            case 'lightning': this.fireLightning(entity, w, monsters, bullets, ownerId); break;
-            case 'axe': this.fireAxe(entity, w, monsters, bullets, ownerId); break;
-            case 'fireball': this.fireFireball(entity, w, monsters, bullets, ownerId); break;
-            case 'knife': this.fireKnife(entity, w, monsters, bullets, ownerId); break;
-            case 'laser': this.fireLaser(entity, w, monsters, bullets, ownerId); break;
-            case 'poison': this.firePoison(entity, w, bullets, ownerId); break;
-            case 'meteor': this.fireMeteor(entity, w, monsters, bullets, ownerId); break;
-            case 'sword': this.fireSword(entity, w, bullets, ownerId); break;
+            case 'bow':
+                this.fireBow(entity, w, targets, bullets, ownerId);
+                break;
+            case 'lightning':
+                this.fireLightning(entity, w, targets, ownerId, room);
+                break;
+            case 'axe':
+                this.fireAxe(entity, w, targets, bullets, ownerId);
+                break;
+            case 'fireball':
+                this.fireFireball(entity, w, targets, bullets, ownerId);
+                break;
+            case 'knife':
+                this.fireKnife(entity, w, targets, bullets, ownerId);
+                break;
+            case 'laser':
+                this.fireLaser(entity, w, targets, bullets, ownerId);
+                break;
+            case 'poison':
+                this.firePoison(entity, w, bullets, ownerId);
+                break;
+            case 'meteor':
+                this.fireMeteor(entity, w, targets, bullets, ownerId);
+                break;
+            case 'sword':
+                this.fireSword(entity, w, bullets, ownerId);
+                break;
         }
     }
 
@@ -95,48 +113,88 @@ export class WeaponSystem {
         }
     }
 
-    fireLightning(entity, w, monsters, bullets, ownerId) {
+    fireLightning(entity, w, targets, ownerId, room = null) {
         const dmg = this.getWeaponStat(w, 'dmg', entity);
-        const targets = Math.max(1, Math.round(this.getWeaponStat(w, 'targets', entity)));
+        const targetCount = Math.max(1, Math.round(this.getWeaponStat(w, 'targets', entity)));
         const chains = Math.max(0, Math.round(this.getWeaponStat(w, 'chain', entity)));
         const chainRange = w.stats.chainRange || 250;
 
-        const sorted = monsters
-            .filter(m => m.hp > 0)
-            .map(m => ({ m, d: Math.hypot(m.x - entity.x, m.y - entity.y) }))
+        const sorted = targets
+            .filter(t => t && t.hp > 0 && t !== entity)
+            .map(t => ({
+                target: t,
+                d: Math.hypot(t.x - entity.x, t.y - entity.y)
+            }))
             .filter(e => e.d < 500)
             .sort((a, b) => a.d - b.d);
 
-        const initialTargets = sorted.slice(0, targets);
+        const initialTargets = sorted.slice(0, targetCount);
 
-        for (const { m: target } of initialTargets) {
+        for (const { target } of initialTargets) {
             const firstDmg = target.isBot ? dmg * 0.35 : dmg;
-            target.takeDamage(firstDmg, entity);
-            if (target.isBot && target.botAI?.onDamageTaken) target.botAI.onDamageTaken(firstDmg, entity);
-            if (entity.totalDmg !== undefined) entity.totalDmg += firstDmg;
 
-            let lastX = target.x, lastY = target.y;
+            target.takeDamage(firstDmg, entity);
+
+            if (entity.totalDmg !== undefined) {
+                entity.totalDmg += firstDmg;
+            }
+            if (room?.emitFx) {
+                room.emitFx({
+                    type: 'lightning',
+                    x1: entity.x,
+                    y1: entity.y,
+                    x2: target.x,
+                    y2: target.y,
+                    col: 0xffff44
+                });
+            }
+
+            let lastX = target.x;
+            let lastY = target.y;
+
             const hitSet = new Set([target]);
             let chainDmg = dmg;
 
             for (let c = 0; c < chains; c++) {
                 chainDmg *= 0.7;
+
                 let nextTarget = null;
                 let nearestDist = chainRange;
-                for (const m of monsters) {
-                    if (m.hp <= 0 || hitSet.has(m)) continue;
-                    if (m === entity) continue;
-                    const d = Math.hypot(m.x - lastX, m.y - lastY);
-                    if (d < nearestDist) { nearestDist = d; nextTarget = m; }
+
+                for (const t of targets) {
+                    if (!t || t.hp <= 0 || t === entity || hitSet.has(t)) continue;
+
+                    const d = Math.hypot(t.x - lastX, t.y - lastY);
+
+                    if (d < nearestDist) {
+                        nearestDist = d;
+                        nextTarget = t;
+                    }
                 }
+
                 if (!nextTarget) break;
 
                 const chainHitDmg = nextTarget.isBot ? chainDmg * 0.35 : chainDmg;
+
                 nextTarget.takeDamage(chainHitDmg, entity);
-                if (nextTarget.isBot && nextTarget.botAI?.onDamageTaken) nextTarget.botAI.onDamageTaken(chainHitDmg, entity);
-                if (entity.totalDmg !== undefined) entity.totalDmg += chainHitDmg;
+
+                if (entity.totalDmg !== undefined) {
+                    entity.totalDmg += chainHitDmg;
+                }
+
+                if (room?.emitFx) {
+                    room.emitFx({
+                        type: 'lightning',
+                        x1: lastX,
+                        y1: lastY,
+                        x2: nextTarget.x,
+                        y2: nextTarget.y,
+                        col: 0xcccc00
+                    });
+                }
 
                 hitSet.add(nextTarget);
+
                 lastX = nextTarget.x;
                 lastY = nextTarget.y;
             }

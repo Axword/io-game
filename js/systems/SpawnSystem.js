@@ -17,8 +17,8 @@ export class SpawnSystem {
             { zone: 0, limit: 300, current: 0 },
             { zone: 1, limit: 400, current: 0 },
             { zone: 2, limit: 750, current: 0 },
-            { zone: 3, limit: 1200, current: 0 }, // STREFA 2
-            { zone: 4, limit: 1600, current: 0 }  // STREFA 1
+            { zone: 3, limit: 700, current: 0 }, // STREFA 2
+            { zone: 4, limit: 700, current: 0 }  // STREFA 1
         ];
     }
     setDifficulty(diff) {
@@ -256,15 +256,6 @@ for (let i = 0; i < monsters.length; i++) {
     spawnXpOrbs(entity, xpOrbs) {
         const count = rngInt(2, 4);
         const xpPerOrb = entity.xp / count;
-        console.log('[spawnXpOrbs]', {
-            id: entity.id || '(no-id)',
-            hp: entity.hp,
-            xp: entity.xp,
-            count,
-            isBoss: entity.isBoss,
-            state: entity.state,
-            isDespawning: entity.isDespawning
-        });
         
         for (let i = 0; i < count; i++) {
             const orb = new XpOrb(

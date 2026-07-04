@@ -1,4 +1,4 @@
-import { ZONES, SPAWN_POINTS, WORLD, BOSS_TYPES } from '../../js/config/constants.js';
+import { ZONES, SPAWN_POINTS, WORLD, BOSS_TYPES, MOVEMENT_MULTIPLIER } from '../../js/config/constants.js';
 import { WEAPONS } from '../../js/config/weapons.js';
 import { BOOKS } from '../../js/config/books.js';
 import { CLASSES } from '../../js/config/classes.js';
@@ -26,7 +26,8 @@ export class Game {
         this.hud = hud;
         this.permStats = permStats;
         this.wsClient = wsClient;
-
+        this.upgradeCards = null;
+        this.upgradeCardsDirty = false;
         this.weaponSystem = new WeaponSystem(this.scene);
         this.upgradeSystem = new UpgradeSystem(permStats);
         this.spawnSystem = new SpawnSystem(ZONES, this.scene);
@@ -74,7 +75,9 @@ export class Game {
         this.playerName = playerName;
         this.inRoomMode = true;
         this.onlineMode = (mode === 'online' && this.wsClient?.connected);
-
+        if (!this.onlineMode) {
+            this.inputManager.setWebSocketClient(null);
+        }
         if (config.difficulty) {
             this.spawnSystem.setDifficulty(config.difficulty);
         }
@@ -118,39 +121,54 @@ export class Game {
         this.wsClient.onPlayerKilled = (msg) => this.handleServerPlayerKilled(msg);
         this.wsClient.onMatchEnded = (msg) => this.handleServerMatchEnded(msg);
         this.wsClient.onPlayerRespawned = (msg) => this.handleServerPlayerRespawned(msg);
+        this.wsClient.onUpgradeDone = (msg) => this.handleServerUpgradeDone(msg);
+        this.wsClient.onFx = (msg) => this.handleServerFx(msg.data);
         try {
-        const roomData = await this.wsClient.joinRoom({
-            name: playerName,
-            playerClass: classId,
-            roomId: config?.roomId || null,
-            difficulty: config?.difficulty || 'medium',
-            bots: config?.bots !== undefined ? config.bots : true,
-            quickJoin: !!config?.quickJoin,
-            create: !!config?.create
-        });
-
-        console.log('[Game] roomData:', roomData);
-
-        if (roomData.online) {
-            this.roomManager.createOnlineRoom(roomData);
-
-            this.serverRoomId = roomData.roomId;
-
-            console.log('[Game] showing room code:', this.serverRoomId);
-
-            this.showRoomCodeOverlay(this.serverRoomId);
-
-            this.hud.addKillFeed(`Dołączono do pokoju ${roomData.roomId}`);
-            this.inRoomMode = true;
-        } else {
-            console.warn('[Game] Online join failed:', roomData.error);
-
-            this.onlineMode = false;
-            this.startOfflineMode({
-                x: this.player.x,
-                y: this.player.y
+            const roomData = await this.wsClient.joinRoom({
+                name: playerName,
+                playerClass: classId,
+                roomId: config?.roomId || null,
+                difficulty: config?.difficulty || 'medium',
+                bots: config?.bots !== undefined ? config.bots : true,
+                quickJoin: !!config?.quickJoin,
+                create: !!config?.create
             });
-        }
+
+
+            if (roomData.online) {
+                this.roomManager.createOnlineRoom(roomData);
+
+                const joinedRoomId =
+                    roomData.roomId ||
+                    roomData.data?.roomId ||
+                    this.wsClient.roomId;
+
+                this.serverRoomId = joinedRoomId;
+
+                console.log('[Game] showing room code:', joinedRoomId);
+
+                this.showRoomCodeOverlay(joinedRoomId);
+
+                this.hud.addKillFeed(`Dołączono do pokoju ${joinedRoomId}`);
+                this.inRoomMode = true;
+            } else {
+                console.warn('[Game] Online join failed:', roomData.error);
+
+                alert(roomData.error || 'Nie udało się dołączyć do pokoju.');
+
+                this.onlineMode = false;
+
+                // Posprzątaj rozpoczęty lokalny player/background jeśli trzeba
+                this.cleanup();
+                this.state = 'menu';
+
+                // Wróć do lobby
+                if (window.gameInstance === this) {
+                    // opcjonalnie
+                }
+
+                return;
+            }
         } catch (e) {
             console.warn('Online mode failed, starting offline:', e);
             this.onlineMode = false;
@@ -169,6 +187,17 @@ export class Game {
 
     startOfflineMode(playerSpawnPoint) {
         this.roomManager.createOfflineRoom(this.player.cls, this.permStats, playerSpawnPoint);
+    }
+
+    handleServerUpgradeDone(msg) {
+        console.log('[Game] upgradeDone:', msg);
+
+        this.pendingUpgrades = 0;
+        this.state = 'playing';
+
+        this.upgradeCards = null;
+        this.upgradeCardsDirty = false;
+        window.gameInstance.upgradeCards = null;
     }
 
     spawnBackground() {
@@ -220,20 +249,42 @@ export class Game {
         this.lastServerStateTime = performance.now();
         this.gameTime = msg.data.gameTime || this.gameTime;
 
+        if (!this._bulletDebugAt || performance.now() - this._bulletDebugAt > 1500) {
+            this._bulletDebugAt = performance.now();
+
+            const bullets = msg.data?.bullets || [];
+        
+        }
+
         const myId = this.wsClient.playerId;
         const meState = msg.data.players.find(p => p.id === myId);
         if (meState) {
-            this.syncEntity(this.player, meState, false, true);
+            // HP/XP/level synchronizujemy normalnie, ale pozycji nie snapujemy agresywnie.
+            this.syncEntity(this.player, meState, false, false);
 
-            if (this.player.updatePosition) {
-                this.player.updatePosition(3, 2.9);
-            } else if (this.player.mesh) {
-                this.player.mesh.position.set(this.player.x, this.player.y, this.player.mesh.position.z);
+            // Zapamiętaj pozycję serwera do miękkiej korekty.
+            this.player.serverX = meState.x;
+            this.player.serverY = meState.y;
+
+            // Pierwszy sync albo teleport/respawn — snap.
+            if (
+                this.player._firstServerSync !== false ||
+                Math.hypot(this.player.x - meState.x, this.player.y - meState.y) > 700
+            ) {
+                this.player.x = meState.x;
+                this.player.y = meState.y;
+                this.player.targetX = meState.x;
+                this.player.targetY = meState.y;
+                this.player._firstServerSync = false;
+
+                if (this.player.updatePosition) {
+                    this.player.updatePosition(3, 2.9);
+                } else if (this.player.mesh) {
+                    this.player.mesh.position.set(this.player.x, this.player.y, this.player.mesh.position.z);
+                }
             }
-
-            this.camera.position.set(this.player.x, this.player.y, 10);
         }
-        this.syncCollection(
+            this.syncCollection(
             this.onlinePlayerMap,
             msg.data.players.filter(p => p.id !== myId),
             (s) => this.createPlayerFromState(s),
@@ -261,6 +312,80 @@ export class Game {
         this.bosses = Array.from(this.onlineBossMap.values());
 
     }
+    getBulletColor(wtype, fallback = 0xffffff) {
+        const colors = {
+            bow: 0x00ff88,
+            knife: 0xe0e0e0,
+            axe: 0xff8800,
+            fireball: 0xff3300,
+            lightning: 0xffff44,
+            laser: 0xff00ff,
+            poison: 0x00ff00,
+            meteor: 0xff6600,
+            sword: 0x88ccff,
+            aura: 0xffaa00
+        };
+
+        return colors[wtype] ?? fallback;
+    }
+    createBulletFromState(s) {
+        const wtype = s.wtype || 'bow';
+        const col = s.col ?? this.getBulletColor(wtype);
+
+        const b = new Bullet(
+            s.x,
+            s.y,
+            s.vx || 0,
+            s.vy || 0,
+            0,
+            null,
+            wtype,
+            s.sz || 1,
+            s.bounces || 0,
+            s.pierce || 0,
+            col,
+            this.scene
+        );
+
+        b.id = s.id;
+        b.ownerId = s.ownerId || null;
+        b.life = s.life ?? b.life;
+
+        b.wtype = wtype;
+        b.col = col;
+        b.angle = s.angle;
+        b.rotation = s.rotation;
+
+        b.laserAngle = s.laserAngle;
+        b.laserRange = s.laserRange;
+        b.laserWidth = s.laserWidth;
+
+        if (wtype === 'laser') {
+            this.rebuildLaserBulletMesh(b, s);
+        }
+
+        return b;
+    }
+    handleServerFx(fxPayload) {
+        const fxEvents = Array.isArray(fxPayload)
+            ? fxPayload
+            : [fxPayload];
+
+        for (const fx of fxEvents) {
+            if (!fx) continue;
+
+            if (fx.type === 'lightning') {
+                this.weaponSystem.createLightningFX(
+                    fx.x1,
+                    fx.y1,
+                    fx.x2,
+                    fx.y2,
+                    this.fxList,
+                    fx.col || 0xffff44
+                );
+            }
+        }
+}
     syncCollection(map, states, factory, hasShape, isPlayer) {
         const seen = new Set();
 
@@ -315,9 +440,65 @@ export class Game {
         if (state.totalDmg !== undefined) entity.totalDmg = state.totalDmg;
 
         if (state.isDead !== undefined) entity.isDead = state.isDead;
+        if (state.weapons) {
+            entity.weapons = state.weapons.map(w => w ? {
+                ...w,
+                appliedUpgrades: new Set(w.appliedUpgrades || [])
+            } : null);
+        }
 
+        if (state.books) {
+            entity.books = state.books.map(b => b ? {
+                ...b,
+                appliedUpgrades: new Set(b.appliedUpgrades || [])
+            } : null);
+        }
         if (state.class !== undefined && entity.cls !== state.class) {
             entity.cls = state.class;
+        }
+        if (state.vx !== undefined) entity.vx = state.vx;
+        if (state.vy !== undefined) entity.vy = state.vy;
+        if (state.life !== undefined) entity.life = state.life;
+        if (state.ownerId !== undefined) entity.ownerId = state.ownerId;
+        if (state.wtype !== undefined) entity.wtype = state.wtype;
+        if (state.col !== undefined) entity.col = state.col;
+
+        if (state.angle !== undefined) entity.angle = state.angle;
+        if (state.rotation !== undefined) entity.rotation = state.rotation;
+        if (state.laserAngle !== undefined) entity.laserAngle = state.laserAngle;
+        if (state.laserRange !== undefined) entity.laserRange = state.laserRange;
+        if (state.laserWidth !== undefined) entity.laserWidth = state.laserWidth;
+        if (entity.wtype === 'axe' || entity.wtype === 'sword') {
+            if (entity.mesh) {
+                entity.mesh.position.set(entity.x, entity.y, 4);
+
+                const angle =
+                    state.angle ??
+                    entity.angle ??
+                    Math.atan2(entity.vy || 0, entity.vx || 1);
+
+                entity.mesh.rotation.z = angle;
+
+                if (entity.wtype === 'axe') {
+                    entity.mesh.rotation.z += performance.now() * 0.015;
+                }
+            }
+        }
+        if (entity.wtype === 'laser') {
+            entity.x = state.x;
+            entity.y = state.y;
+            entity.targetX = state.x;
+            entity.targetY = state.y;
+
+            if (entity.mesh) {
+                entity.mesh.position.set(entity.x, entity.y, 2.5);
+                entity.mesh.rotation.z = entity.laserAngle || 0;
+            }
+
+            if (entity.glow) {
+                entity.glow.position.set(entity.x, entity.y, 2.3);
+                entity.glow.rotation.z = entity.laserAngle || 0;
+            }
         }
     }
     createPlayerFromState(s) {
@@ -351,10 +532,45 @@ export class Game {
         return m;
     }
 
-    createBulletFromState(s) {
-        const b = new Bullet(s.x, s.y, s.vx || 0, s.vy || 0, 0, null, s.wtype || 'bow', s.sz || 1, 0, 0, s.col || 0xffffff, this.scene);
-        b.id = s.id;
-        return b;
+    rebuildLaserBulletMesh(b, s) {
+        const range = s.laserRange || s.range || 350;
+        const width = s.laserWidth || s.width || 18;
+        const angle = s.laserAngle ?? s.angle ?? 0;
+        const col = s.col ?? 0xff00ff;
+
+        if (b.mesh) {
+            this.scene.remove(b.mesh);
+        }
+
+        const geo = new THREE.PlaneGeometry(range, width);
+        const mat = new THREE.MeshBasicMaterial({
+            color: col,
+            transparent: true,
+            opacity: 0.75,
+            side: THREE.DoubleSide
+        });
+
+        b.mesh = new THREE.Mesh(geo, mat);
+        b.mesh.position.set(s.x, s.y, 2.5);
+        b.mesh.rotation.z = angle;
+        this.scene.add(b.mesh);
+
+        if (b.glow) {
+            this.scene.remove(b.glow);
+        }
+
+        const glowGeo = new THREE.PlaneGeometry(range, width * 3);
+        const glowMat = new THREE.MeshBasicMaterial({
+            color: col,
+            transparent: true,
+            opacity: 0.12,
+            side: THREE.DoubleSide
+        });
+
+        b.glow = new THREE.Mesh(glowGeo, glowMat);
+        b.glow.position.set(s.x, s.y, 2.3);
+        b.glow.rotation.z = angle;
+        this.scene.add(b.glow);
     }
 
     createXpOrbFromState(s) {
@@ -377,12 +593,24 @@ export class Game {
     }
 
     handleServerUpgradeOptions(msg) {
-        if (msg.data?.cards && msg.data.cards.length > 0) {
+        const data = msg.data || {};
+
+        console.log('[Game] upgradeOptions:', data);
+
+        if (data.pendingUpgrades !== undefined) {
+            this.pendingUpgrades = data.pendingUpgrades;
+        }
+
+        if (data.cards && data.cards.length > 0) {
             this.state = 'upgrade';
-            window.gameInstance.upgradeCards = msg.data.cards;
+
+            this.upgradeCards = data.cards;
+            this.upgradeCardsDirty = true;
+
+            // opcjonalnie dla debug / kompatybilności
+            window.gameInstance.upgradeCards = data.cards;
         }
     }
-
     handleServerPlayerDead(msg) {
         const data = msg.data || {};
 
@@ -432,10 +660,11 @@ export class Game {
     //  MAIN LOOP
     // ═══════════════════════════════════════════════════════════
     interpolateOnlineEntities(dt) {
-        const alpha = Math.min(1, dt * 14);
-        const interpolate = (entity) => {
+        const interpolate = (entity, speed = 14) => {
             if (!entity) return;
             if (entity.targetX === undefined || entity.targetY === undefined) return;
+
+            const alpha = Math.min(1, dt * speed);
 
             entity.x += (entity.targetX - entity.x) * alpha;
             entity.y += (entity.targetY - entity.y) * alpha;
@@ -445,14 +674,22 @@ export class Game {
             } else if (entity.mesh) {
                 entity.mesh.position.set(entity.x, entity.y, entity.mesh.position.z);
             }
+
+            if (typeof entity.updateHealthBar === 'function') {
+                entity.updateHealthBar();
+            }
         };
-        for (const e of this.onlinePlayerMap.values()) interpolate(e);
-        for (const e of this.onlineBotMap.values()) interpolate(e);
-        for (const e of this.onlineMonsterMap.values()) interpolate(e);
-        for (const e of this.onlineBossMap.values()) interpolate(e);
-        for (const e of this.onlineXpOrbMap.values()) interpolate(e);
-        for (const e of this.onlineBulletMap.values()) interpolate(e);
-    }
+
+        for (const e of this.onlinePlayerMap.values()) interpolate(e, 18);
+        for (const e of this.onlineBotMap.values()) interpolate(e, 18);
+
+        // Ważne: potwory szybciej doganiają serwer
+        for (const e of this.onlineMonsterMap.values()) interpolate(e, 26);
+        for (const e of this.onlineBossMap.values()) interpolate(e, 22);
+
+        for (const e of this.onlineXpOrbMap.values()) interpolate(e, 14);
+        for (const e of this.onlineBulletMap.values()) interpolate(e, 30);
+   }
     update(dt) {
         if (!this.player) return null;
 
@@ -464,18 +701,34 @@ export class Game {
 
     updateOnline(dt) {
         this.inputManager.update(dt);
-        this.interpolateOnlineEntities(dt);
-        // Camera already follows player in handleServerState
-        if (this.player) {
-            this.camera.position.set(this.player.x, this.player.y, 10);
-        }
 
-        // Server owns positions; we only animate visual effects here if needed
+        // Lokalny ruch natychmiast
+        this.updateLocalPlayerPrediction(dt);
+
+        // Miękka korekta do serwera
+        this.reconcileLocalPlayerWithServer(dt);
+
+        // Inne encje
+        this.interpolateOnlineEntities(dt);
+
+        // Aura visual
+        this.updateOnlineAuraVisuals(dt);
+
+        // Płynna kamera — ZAMIAST camera.position.set(...)
+        this.updateOnlineCamera(dt);
+
         for (const fx of this.fxList) {
             fx.life -= dt;
-            if (fx.life > 0) fx.mesh.material.opacity = fx.life / 0.15;
-            else this.scene.remove(fx.mesh);
+
+            if (fx.life > 0) {
+                if (fx.mesh.material) {
+                    fx.mesh.material.opacity = fx.life / (fx.maxLife || 0.25);
+                }
+            } else {
+                this.scene.remove(fx.mesh);
+            }
         }
+
         this.fxList = this.fxList.filter(fx => fx.life > 0);
 
         this.hud.update(this.player, ZONES);
@@ -483,13 +736,13 @@ export class Game {
         this.scoreboard.update(this.player, this.bots);
         this.updateBotHealthBars();
 
-        if (this.state === 'upgrade' && window.gameInstance.upgradeCards) {
-            return window.gameInstance.upgradeCards;
+        if (this.state === 'upgrade' && this.upgradeCardsDirty && this.upgradeCards) {
+            this.upgradeCardsDirty = false;
+            return this.upgradeCards;
         }
 
         return null;
     }
-
     updateOffline(dt) {
         this.gameTime += dt;
         this.roomManager.update(dt, this.bots, this.hud);
@@ -730,12 +983,12 @@ export class Game {
         });
         this.bots = this.bots.filter(b => b.hp > 0);
     }
-
     updateBotHealthBars() {
-        // Aktualizuj co ~100ms (10fps) - DOM manipulation jest kosztowne
+        // Aktualizuj co ~50ms
         if (!this._hpBarTimer) this._hpBarTimer = 0;
-        this._hpBarTimer += 0.016; // approx dt
-        if (this._hpBarTimer < 0.1) return;
+        this._hpBarTimer += 0.016;
+
+        if (this._hpBarTimer < 0.05) return;
         this._hpBarTimer = 0;
 
         this._initBotHealthBarContainer();
@@ -744,73 +997,121 @@ export class Game {
         const canvas = this.renderer.renderer.domElement;
         const W = canvas.clientWidth;
         const H = canvas.clientHeight;
-        const VIEW = 450; // musi zgadzać się z constants.js
 
-        // Przelicz współrzędne świata -> ekran (kamera ortograficzna)
-        const worldToScreen = (wx, wy) => {
-            const asp = W / H;
-            const camX = camera.position.x;
-            const camY = camera.position.y;
-            const halfW = VIEW * asp;
-            const halfH = VIEW;
-            const sx = ((wx - camX + halfW) / (2 * halfW)) * W;
-            const sy = ((1 - (wy - camY + halfH) / (2 * halfH))) * H;
-            return { sx, sy };
+        const worldToScreen = (wx, wy, wz = 0) => {
+            const vector = new THREE.Vector3(wx, wy, wz);
+            vector.project(camera);
+
+            return {
+                sx: (vector.x * 0.5 + 0.5) * W,
+                sy: (-vector.y * 0.5 + 0.5) * H,
+                visible: vector.z >= -1 && vector.z <= 1
+            };
         };
 
         const container = this._botHpContainer;
         const elements = this._botHpElements;
-        const activeBotIds = new Set();
+        const activeIds = new Set();
 
-        for (const bot of this.bots) {
-            if (bot.hp <= 0) continue;
-            const id = bot.name || bot;
-            activeBotIds.add(id);
+        // WAŻNE:
+        // Tylko boty / inni gracze.
+        // Nie dodawaj tutaj monsters/bosses, bo wtedy będą podwójne paski.
+        const entities = this.bots;
+
+        for (const bot of entities) {
+            if (!bot || bot.hp <= 0 || !bot.maxHp) continue;
+
+            const id = bot.id || bot.name || bot;
+            activeIds.add(id);
 
             if (!elements.has(id)) {
                 const wrapper = document.createElement('div');
-                wrapper.style.cssText = 'position:absolute;display:flex;flex-direction:column;align-items:center;transform:translate(-50%,-100%);gap:1px;';
+                wrapper.style.cssText = `
+                    position:absolute;
+                    display:flex;
+                    flex-direction:column;
+                    align-items:center;
+                    transform:translate(-50%,-100%);
+                    gap:1px;
+                    pointer-events:none;
+                `;
 
                 const nameEl = document.createElement('div');
-                nameEl.style.cssText = 'font-size:10px;font-weight:bold;color:#fff;text-shadow:0 1px 2px #000;white-space:nowrap;';
+                nameEl.style.cssText = `
+                    font-size:10px;
+                    font-weight:bold;
+                    color:#fff;
+                    text-shadow:0 1px 2px #000;
+                    white-space:nowrap;
+                `;
+
                 nameEl.textContent = bot.name || 'Bot';
 
                 const barBg = document.createElement('div');
-                barBg.style.cssText = 'width:36px;height:4px;background:#333;border-radius:2px;overflow:hidden;';
+                barBg.style.cssText = `
+                    width:36px;
+                    height:4px;
+                    background:#333;
+                    border-radius:2px;
+                    overflow:hidden;
+                `;
 
                 const barFill = document.createElement('div');
-                barFill.style.cssText = 'height:100%;background:#e53935;border-radius:2px;transition:width 0.1s;';
-                barBg.appendChild(barFill);
+                barFill.style.cssText = `
+                    height:100%;
+                    background:#e53935;
+                    border-radius:2px;
+                    transition:width 0.1s;
+                `;
 
+                barBg.appendChild(barFill);
                 wrapper.appendChild(nameEl);
                 wrapper.appendChild(barBg);
                 container.appendChild(wrapper);
-                elements.set(id, { wrapper, barFill });
+
+                elements.set(id, {
+                    wrapper,
+                    barFill,
+                    nameEl
+                });
             }
 
             const el = elements.get(id);
-            const pct = Math.max(0, Math.min(1, bot.hp / bot.maxHp)) * 100;
+
+            const hpRatio = Math.max(0, Math.min(1, bot.hp / bot.maxHp));
+            const pct = hpRatio * 100;
+
             el.barFill.style.width = pct + '%';
 
-            const hpRatio = bot.hp / bot.maxHp;
-            if (hpRatio > 0.6) el.barFill.style.background = '#43a047';
-            else if (hpRatio > 0.3) el.barFill.style.background = '#fdd835';
-            else el.barFill.style.background = '#e53935';
+            if (hpRatio > 0.6) {
+                el.barFill.style.background = '#43a047';
+            } else if (hpRatio > 0.3) {
+                el.barFill.style.background = '#fdd835';
+            } else {
+                el.barFill.style.background = '#e53935';
+            }
 
-            const { sx, sy } = worldToScreen(bot.x, bot.y);
+            const { sx, sy, visible } = worldToScreen(bot.x, bot.y, 0);
+
+            const onScreen =
+                visible &&
+                sx >= -80 &&
+                sx <= W + 80 &&
+                sy >= -80 &&
+                sy <= H + 80;
+
             el.wrapper.style.left = sx + 'px';
             el.wrapper.style.top = (sy - 14) + 'px';
-            el.wrapper.style.display = '';
+            el.wrapper.style.display = onScreen ? '' : 'none';
         }
 
         for (const [id, el] of elements) {
-            if (!activeBotIds.has(id)) {
+            if (!activeIds.has(id)) {
                 el.wrapper.remove();
                 elements.delete(id);
             }
         }
     }
-
     _initBotHealthBarContainer() {
         if (this._botHpContainer) return;
         const div = document.createElement('div');
@@ -851,15 +1152,30 @@ export class Game {
         }
         this.bots.push(newBot);
     }
-
     applyUpgrade(card) {
         if (this.onlineMode) {
             this.wsClient.sendUpgradeSelect(card.upgradeKey);
-        } else {
-            this.upgradeSystem.applyUpgrade(card, this.player, this.weaponSystem);
+
+            this.upgradeCards = null;
+            this.upgradeCardsDirty = false;
+            window.gameInstance.upgradeCards = null;
+
+            this.pendingUpgrades--;
+
+            if (this.pendingUpgrades <= 0) {
+                this.state = 'playing';
+            }
+
+            return;
         }
+
+        this.upgradeSystem.applyUpgrade(card, this.player, this.weaponSystem);
+
         this.pendingUpgrades--;
-        if (this.pendingUpgrades <= 0) this.state = 'playing';
+
+        if (this.pendingUpgrades <= 0) {
+            this.state = 'playing';
+        }
     }
 
     onPlayerDeath() {
@@ -943,6 +1259,39 @@ export class Game {
             this.room.upgradePermanentStat(this.playerName, id, step);
         }
     }
+    updateOnlineAuraVisuals(dt) {
+        const updateOne = (entity) => {
+            if (!entity || !entity.weapons) return;
+
+            const hasAura = entity.weapons.some(w => w?.type === 'aura');
+
+            if (!hasAura) {
+                if (entity.auraRing) {
+                    this.scene.remove(entity.auraRing);
+                    entity.auraRing = null;
+                }
+
+                if (entity.auraInner) {
+                    this.scene.remove(entity.auraInner);
+                    entity.auraInner = null;
+                }
+
+                return;
+            }
+
+            if (!entity.auraRing) {
+                this.weaponSystem.setupAura(entity);
+            }
+
+            // Pusta lista celów = tylko visual, bez damage
+            this.weaponSystem.updateAura(entity, dt, [], entity);
+        };
+
+        updateOne(this.player);
+
+        for (const p of this.onlinePlayerMap.values()) updateOne(p);
+        for (const b of this.onlineBotMap.values()) updateOne(b);
+    }
     showRoomCodeOverlay(roomId) {
         const overlay = document.getElementById('room-code-overlay');
         const value = document.getElementById('room-code-value');
@@ -964,6 +1313,93 @@ export class Game {
         console.log('[RoomCode] visible:', roomId);
     }
 
+    updateLocalPlayerPrediction(dt) {
+        if (!this.player || !this.inputManager) return;
+        if (this.player.hp <= 0 || this.player.isDead) return;
+
+        let dx = 0;
+        let dy = 0;
+
+        if (this.inputManager.isKeyPressed?.('KeyW') || this.inputManager.isKeyPressed?.('ArrowUp')) dy += 1;
+        if (this.inputManager.isKeyPressed?.('KeyS') || this.inputManager.isKeyPressed?.('ArrowDown')) dy -= 1;
+        if (this.inputManager.isKeyPressed?.('KeyA') || this.inputManager.isKeyPressed?.('ArrowLeft')) dx -= 1;
+        if (this.inputManager.isKeyPressed?.('KeyD') || this.inputManager.isKeyPressed?.('ArrowRight')) dx += 1;
+
+        if (!dx && !dy) return;
+
+        const len = Math.hypot(dx, dy) || 1;
+
+        // Dopasuj pod swoje Player.js, jeśli masz inną nazwę speeda.
+        const speed =
+            this.player.getFinalMoveSpeed?.() ||
+            this.player.speed ||
+            this.player.spd ||
+            this.player.baseSpeed ||
+            3;
+
+        // U Ciebie na serwerze jest MOVEMENT_MULTIPLIER * dt * 60.
+        // Jeśli klient nie importuje MOVEMENT_MULTIPLIER, użyj 1 jako fallback.
+        const movementMultiplier =
+            typeof MOVEMENT_MULTIPLIER !== 'undefined'
+                ? MOVEMENT_MULTIPLIER
+                : 1;
+
+        this.player.x += (dx / len) * speed * movementMultiplier * dt * 60;
+        this.player.y += (dy / len) * speed * movementMultiplier * dt * 60;
+
+        const half = WORLD / 2;
+
+        this.player.x = Math.max(-half, Math.min(half, this.player.x));
+        this.player.y = Math.max(-half, Math.min(half, this.player.y));
+    }
+    updateOnlineCamera(dt) {
+        if (!this.player || !this.camera) return;
+
+        const targetX = this.player.x;
+        const targetY = this.player.y;
+
+        const dx = targetX - this.camera.position.x;
+        const dy = targetY - this.camera.position.y;
+        const dist = Math.hypot(dx, dy);
+
+        if (dist > 1000) {
+            this.camera.position.set(targetX, targetY, 10);
+            return;
+        }
+
+        const alpha = Math.min(1, dt * 22);
+
+        this.camera.position.x += dx * alpha;
+        this.camera.position.y += dy * alpha;
+        this.camera.position.z = 10;
+}
+    reconcileLocalPlayerWithServer(dt) {
+        if (!this.player) return;
+        if (this.player.serverX === undefined || this.player.serverY === undefined) return;
+
+        const dx = this.player.serverX - this.player.x;
+        const dy = this.player.serverY - this.player.y;
+        const dist = Math.hypot(dx, dy);
+
+        // Bardzo duży desync / respawn / teleport
+        if (dist > 900) {
+            this.player.x = this.player.serverX;
+            this.player.y = this.player.serverY;
+        }
+        // Małe różnice ignoruj, żeby nie "ciągnęło" gracza
+        else if (dist > 25) {
+            const correction = Math.min(1, dt * 3.5);
+
+            this.player.x += dx * correction;
+            this.player.y += dy * correction;
+        }
+
+        if (this.player.updatePosition) {
+            this.player.updatePosition(3, 2.9);
+        } else if (this.player.mesh) {
+            this.player.mesh.position.set(this.player.x, this.player.y, this.player.mesh.position.z);
+        }
+    }
     hideRoomCodeOverlay() {
         const overlay = document.getElementById('room-code-overlay');
         const value = document.getElementById('room-code-value');
