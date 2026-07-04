@@ -4,6 +4,7 @@ export class Room {
         this.difficulty = difficulty;
         this.createdAt = Date.now();
         this.playerStats = new Map();
+        this.onPermStatsUpdated = null;
     }
     
     addPlayer(playerId) {
@@ -34,13 +35,8 @@ export class Room {
         return this.getPlayerStats(playerId).permanentStats;
     }
     
-    upgradePermanentStat(playerId, statId, amount) {
-        const stats = this.getPermanentStats(playerId);
-        if (stats.hasOwnProperty(statId)) {
-            stats[statId] += amount;
-        }
-    }
-    
+
+
     getDuration() {
         return (Date.now() - this.createdAt) / 1000;
     }

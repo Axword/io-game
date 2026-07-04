@@ -14,6 +14,8 @@ class ArenaIO {
     constructor() {
         this.permStats = loadPermStats();
         this.isOnline = false;
+        this.wsClient = new WebSocketClient();
+
         this.initSystems();
         this.initUI();
         this.init();
@@ -33,7 +35,8 @@ class ArenaIO {
         this.lobbyScreen = new LobbyScreen(
             (name) => this.onQuickJoin(name),
             (name, code) => this.onJoinWithCode(name, code),
-            (name, config) => this.onCreateRoom(name, config)
+            (name, config) => this.onCreateRoom(name, config),
+            (name) => this.onOfflinePlay(name)
         );
         this.upgradeScreen = new UpgradeScreen((card) => this.onUpgradeSelect(card));
         this.roomMenuScreen = new RoomMenuScreen(() => this.onLeaveRoom());
@@ -48,23 +51,35 @@ class ArenaIO {
         window.roomMenuScreen = this.roomMenuScreen;
     }
     
-    async init() {
-        await this.initNetwork();
+    init() {
         this.start();
+        this.initNetwork().then(() => {
+            console.log('[Network] init done', {
+                isOnline: this.isOnline
+            });
+        });
     }
-    
     async initNetwork() {
-        this.wsClient = new WebSocketClient();
         try {
-            await this.wsClient.connect('ws://localhost:3000');
+            await this.wsClient.connect(`ws://${window.location.hostname}:3000`);
+
             this.isOnline = true;
+
             console.log('[Network] Connected - multiplayer available');
+
+            if (this.game) {
+                this.game.wsClient = this.wsClient;
+            }
         } catch (e) {
             this.isOnline = false;
+
             console.log('[Network] Offline - playing with bots');
+
+            if (this.game) {
+                this.game.wsClient = this.wsClient;
+            }
         }
-    }
-    
+    } 
     start() {
         this.game = new Game(this.renderer, this.inputManager, this.hud, this.permStats, this.wsClient);
         this.lobbyScreen.show(this.permStats);
@@ -73,28 +88,63 @@ class ArenaIO {
     }
     
     async onQuickJoin(playerName) {
-        if (this.isOnline) {
-            this.wsClient.send('quick_join', { name: playerName });
-        } else {
-            this.startOfflineGame(playerName);
-        }
+        this.forceOffline = false;
+        this.currentPlayerName = playerName;
+
+        this.currentConfig = {
+            difficulty: 'medium',
+            quickJoin: true,
+            create: false,
+            online: true,
+        };
+
+        this.lobbyScreen.hide();
+        this.menuScreen.show(this.permStats);
     }
-    
+    onOfflinePlay(playerName) {
+        console.log('[Offline] Starting offline game for player:', playerName);
+        this.forceOffline = true;
+        this.currentPlayerName = playerName;
+        this.currentConfig = {
+            difficulty: 'medium',
+            offline: true,
+            online: false
+        };
+        this.lobbyScreen.hide();
+        this.menuScreen.show(this.permStats);
+    }
     async onJoinWithCode(playerName, code) {
-        if (this.isOnline) {
-            this.wsClient.send('join_room', { name: playerName, code });
-        } else {
-            alert('Tryb online niedostępny');
-            this.lobbyScreen.showLobby();
-        }
+        this.forceOffline = false;
+        this.currentPlayerName = playerName;
+
+        this.currentConfig = {
+            roomId: String(code || '').trim().toUpperCase(),
+            quickJoin: false,
+            create: false,
+            online: true
+        };
+        console.log('[ArenaIO] Join with code:', {
+            playerName,
+            code,
+            currentConfig: this.currentConfig
+        });
+        this.lobbyScreen.hide();
+        this.menuScreen.show(this.permStats);
     }
-    
+
     async onCreateRoom(playerName, config) {
-        if (this.isOnline) {
-            this.wsClient.send('create_room', { name: playerName, config });
-        } else {
-            this.startOfflineGame(playerName, config);
-        }
+        this.forceOffline = false;
+        this.currentPlayerName = playerName;
+
+        this.currentConfig = {
+            ...config,
+            create: true,
+            quickJoin: false,
+            online: true
+        };
+
+        this.lobbyScreen.hide();
+        this.menuScreen.show(this.permStats);
     }
     
     startOfflineGame(playerName, config = {}) {
@@ -103,13 +153,74 @@ class ArenaIO {
         this.currentPlayerName = playerName;
         this.currentConfig = config;
     }
-    
     async onClassSelect(classId) {
-        const mode = this.isOnline ? 'online' : 'offline';
-        await this.game.start(classId, mode, this.currentPlayerName, this.currentConfig);
-        this.menuScreen.hide();
-    }
-    
+        const wantsOffline = this.forceOffline || this.currentConfig?.offline;
+
+        const wantsOnline =
+            !wantsOffline &&
+            (
+                this.currentConfig?.online ||
+                this.currentConfig?.roomId ||
+                this.currentConfig?.quickJoin ||
+                this.currentConfig?.create
+            );
+
+        let mode = 'offline';
+
+        if (wantsOnline) {
+            const ok = await this.ensureNetwork();
+
+            if (!ok) {
+                alert('Nie udało się połączyć z serwerem.');
+                return;
+            }
+
+            mode = 'online';
+        } else if (!wantsOffline && this.isOnline) {
+            mode = 'online';
+        }
+
+        console.log('[ArenaIO] Class selected:', {
+            classId,
+            mode,
+            wantsOnline,
+            wantsOffline,
+            isOnline: this.isOnline,
+            wsConnected: this.wsClient?.connected,
+            currentConfig: this.currentConfig
+        });
+
+        try {
+            await this.game.start(
+                classId,
+                mode,
+                this.currentPlayerName,
+                this.currentConfig
+            );
+
+            this.menuScreen.hide();
+        } catch (e) {
+            console.warn('[ArenaIO] Game start failed:', e);
+
+            alert(e.message || 'Nie udało się dołączyć do pokoju.');
+
+            // Posprzątaj niedokończoną grę
+            if (this.game) {
+                this.game.cleanup();
+                this.game.state = 'menu';
+            }
+
+            this.menuScreen.hide();
+
+            // Jeśli to było dołączanie kodem, wróć do wpisywania kodu
+            if (this.currentConfig?.roomId) {
+                this.lobbyScreen.show(this.permStats);
+                this.lobbyScreen.showJoinCodeScreen(this.currentConfig.roomId);
+            } else {
+                this.lobbyScreen.show(this.permStats);
+            }
+        }
+    }    
     onUpgradeSelect(card) {
         this.game.applyUpgrade(card);
         if (this.game.pendingUpgrades <= 0) {
@@ -118,10 +229,26 @@ class ArenaIO {
             this.upgradeScreen.show(this.game.upgradeSystem.generateUpgradeCards(this.game.player));
         }
     }
-    
     onShowPermScreen() {
+        if (this.game.onlineMode) {
+            const onlinePermStats =
+                this.game.serverPermStats ||
+                this.game.deathData?.permStats ||
+                this.permStats;
+
+            this.deathScreen.showPermScreen(onlinePermStats, (id, step) => {
+                onlinePermStats[id] = (onlinePermStats[id] || 0) + step;
+
+                this.game.upgradePermanentStat(id, step);
+            });
+
+            this.deathScreen.onRespawn = () => this.onRespawnInRoom();
+            return;
+        }
+
         if (this.game.room && this.game.playerName) {
             const roomPermStats = this.game.room.getPermanentStats(this.game.playerName);
+
             this.deathScreen.showPermScreen(roomPermStats, (id, step) => {
                 this.game.room.upgradePermanentStat(this.game.playerName, id, step);
             });
@@ -133,7 +260,6 @@ class ArenaIO {
         }
         this.deathScreen.onRespawn = () => this.onRespawnInRoom();
     }
-    
     onPlayAgain() {
         this.deathScreen.hide();
         this.deathScreen.hidePermScreen();
@@ -150,9 +276,28 @@ class ArenaIO {
     onRespawnInRoom() {
         this.deathScreen.hide();
         this.deathScreen.hidePermScreen();
-        this.game.respawnPlayer();
+
+        if (this.game.onlineMode) {
+            this.game.requestRespawn();
+        } else {
+            this.game.respawnPlayer();
+        }
     }
-    
+
+    async ensureNetwork() {
+        if (this.wsClient?.connected) {
+            this.isOnline = true;
+            return true;
+        }
+        try {
+            await this.initNetwork();
+            return this.wsClient?.connected === true;
+        } catch (e) {
+            console.warn('[Network] ensureNetwork failed:', e);
+            return false;
+        }
+    }
+
     startLoop() {
         const loop = (timestamp) => {
             requestAnimationFrame(loop);
@@ -170,7 +315,13 @@ class ArenaIO {
             
             if (this.game.state === 'dead') {
                 const deathData = this.game.onPlayerDeath();
-                this.deathScreen.show(deathData.level, deathData.kills, deathData.totalDmg, deathData.isInRoom);
+                this.deathScreen.show(
+                    deathData.level,
+                    deathData.kills,
+                    deathData.totalDmg,
+                    deathData.isInRoom,
+                    deathData.pendingPermPts
+                );
                 this.game.state = 'death_screen';
             }
             

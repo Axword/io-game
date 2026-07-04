@@ -881,3 +881,31 @@ body {
     background: linear-gradient(135deg, rgba(240,230,255,.9), rgba(220,210,255,.9));
     box-shadow: 0 0 8px rgba(138, 43, 226, .3);
 }
+#room-code-overlay {
+    position: fixed;
+    right: 16px;
+    bottom: 16px;
+    z-index: 9999;
+    padding: 10px 14px;
+    min-width: 120px;
+    background: rgba(0, 0, 0, 0.72);
+    color: #fff;
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    border-radius: 8px;
+    font-family: 'Share Tech Mono', monospace;
+    text-align: right;
+    pointer-events: none;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+}
+
+#room-code-overlay .room-code-label {
+    opacity: 0.65;
+    font-size: 11px;
+    letter-spacing: 1px;
+}
+
+#room-code-overlay .room-code-value {
+    font-size: 20px;
+    font-weight: bold;
+    letter-spacing: 2px;
+}

@@ -51,6 +51,11 @@
         <div id="scoreboard-list"></div>
     </div>
 
+    <div id="room-code-overlay" style="display:none;">
+        <div class="room-code-label">KOD POKOJU</div>
+        <div class="room-code-value" id="room-code-value">------</div>
+    </div>
+
     <div class="screen" id="s-menu">
         <div class="s-title title-gradient">ARENA.IO</div>
         <div class="s-sub">wybierz klasę postaci</div>
@@ -70,10 +75,14 @@
 
         <div class="lobby-grid">
             <button class="lobby-btn btn-quick" id="btn-quick-join">⚡ Szybka Gra</button>
-            <button class="lobby-btn btn-join" id="btn-join-code">🔑 Dołącz przez Kod</button>
+            <button type="button" class="lobby-btn btn-offline" id="btn-offline">🖥️ Gra Offline</button>
         </div>
+        <div class="lobby-grid">
 
-        <button class="lobby-btn btn-create" id="btn-create-room">🎮 Stwórz Pokój</button>
+            <button class="lobby-btn btn-create" id="btn-create-room">🎮 Stwórz Pokój</button>
+            <button class="lobby-btn btn-join" id="btn-join-code">🔑 Dołącz przez Kod</button>
+
+        </div>
 
         <div id="perm-disp-lobby" class="input-hint mt-24"></div>
     </div>

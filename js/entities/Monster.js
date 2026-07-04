@@ -477,16 +477,44 @@ export class Monster extends Entity {
         this.updateStateEffect();
     }
 
+    updatePosition() {
+        if (this.mesh) {
+            this.mesh.position.set(this.x, this.y, 2);
+        }
+
+        if (this.outline) {
+            this.outline.position.set(this.x, this.y, 1.9);
+        }
+
+        if (this.glowRing) {
+            this.glowRing.position.set(this.x, this.y, 1.8);
+        }
+
+        this.updateHealthBar();
+    }
     updateHealthBar() {
-        const hpPct = this.hp / this.maxHp;
+        if (!this.hpBarBg || !this.hpBarFg) return;
+
+        const hpPct = this.maxHp > 0
+            ? Math.max(0, Math.min(1, this.hp / this.maxHp))
+            : 0;
+
         const barWidth = this.isBoss ? this.sz * 2 : this.sz * 1.6;
         const barOffset = this.isBoss ? this.sz + 10 : this.sz + 4;
 
         this.hpBarBg.position.set(this.x, this.y + barOffset, 2.5);
-        this.hpBarFg.position.set(this.x - (barWidth * (1 - hpPct)) / 2, this.y + barOffset, 2.6);
-        this.hpBarFg.scale.x = hpPct;
-    }
 
+        this.hpBarFg.position.set(
+            this.x - (barWidth * (1 - hpPct)) / 2,
+            this.y + barOffset,
+            2.6
+        );
+
+        this.hpBarFg.scale.x = hpPct;
+
+        this.hpBarBg.visible = this.hp > 0 && this.hp < this.maxHp;
+        this.hpBarFg.visible = this.hp > 0 && this.hp < this.maxHp;
+    }
     updateHitEffect(dt) {
         if (this.hitTimer > 0) {
             this.hitTimer -= dt;

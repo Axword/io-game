@@ -19,21 +19,24 @@ export class DeathScreen {
         this.onRespawn = null;
         this.onLeaveRoom = null;
     }
-    
-    show(level, kills, totalDmg, isInRoom = false) {
+    show(level, kills, totalDmg, isInRoom = false, pendingPermPts = null) {
         this.isInRoom = isInRoom;
-        this.pendingPermPts = Math.floor(level / 3) + 1;
+
+        this.pendingPermPts = pendingPermPts !== null
+            ? pendingPermPts
+            : Math.floor(level / 3) + 1;
+
         this.deathStats.innerHTML = `
             POZIOM: ${level}<br>
             ZABICI WROGOWIE: ${kills}<br>
             CAŁKOWITE OBRAŻENIA: ${Math.floor(totalDmg)}
         `;
+
         this.screen.style.display = 'flex';
         this.permScreen.style.display = 'none';
-        
+
         this.updateButtonsForRoom(isInRoom);
     }
-    
     updateButtonsForRoom(isInRoom) {
         this.btnPerm.style.display = 'block';
         
@@ -113,6 +116,7 @@ export class DeathScreen {
             `;
             el.addEventListener('click', () => {
                 if (this.pendingPermPts <= 0) return;
+                permStats[pd.id] = (permStats[pd.id] || 0) + pd.step;
                 onPermUpgrade(pd.id, pd.step);
                 this.pendingPermPts--;
                 this.buildPermCards(permStats, onPermUpgrade);
