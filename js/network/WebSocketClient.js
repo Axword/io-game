@@ -165,12 +165,14 @@ export class WebSocketClient {
     }
     sendInput(inputData) {
         if (!this.connected || !this.playerId) return;
+
         this.send('input', {
-            playerId: this.playerId,
-            data: inputData
+            keys: inputData.keys || {},
+            mouseX: inputData.mouseX ?? 0,
+            mouseY: inputData.mouseY ?? 0,
+            mouseClicked: !!inputData.mouseClicked
         });
     }
-
     sendUpgradeSelect(upgradeKey) {
         if (!this.connected || !this.playerId) return;
         this.send('upgradeSelect', {
