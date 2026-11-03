@@ -20,6 +20,12 @@ body {
     z-index: 1;
 }
 
+#menu-backdrop { position: fixed; inset: -1.5%; width: 103%; height: 103%; z-index: 2; pointer-events: none; filter: blur(3px) saturate(.9); }
+#menu-backdrop[hidden] { display: none; }
+#s-lobby, #s-menu, #s-room-config, #s-join-code, #s-waiting-room { background: rgba(247, 248, 251, .7); }
+#s-lobby .panel-box, #s-room-config .panel-box, #s-join-code .panel-box { background: rgba(255, 255, 255, .94); }
+#s-lobby .s-title, #s-menu .s-title { filter: drop-shadow(0 2px 0 rgba(255, 255, 255, .8)); }
+
 #ui {
     position: fixed;
     inset: 0;
@@ -161,7 +167,7 @@ body {
 
 #zone-txt {
     position: fixed;
-    top: 12px;
+    top: 48px;
     left: 12px;
     font-size: 13px;
     color: #222;
@@ -547,14 +553,6 @@ body {
     cursor: not-allowed;
 }
 
-#perm-disp {
-    font-size: 11px;
-    color: #666;
-    margin-bottom: 4px;
-    text-align: center;
-    font-family: 'Share Tech Mono', monospace;
-}
-
 .kf {
     position: fixed;
     top: 12px;
@@ -664,6 +662,14 @@ body {
     width: 100%;
     max-width: 500px;
 }
+
+.lobby-actions {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 14px;
+    width: min(500px, 100%);
+}
+.lobby-actions .lobby-btn { width: 100%; min-width: 0; min-height: 56px; padding: 14px 8px; }
 
 .lobby-btn {
     padding: 18px;
@@ -929,10 +935,10 @@ body {
 .item-slot .game-icon { width: 34px; height: 34px; }
 .item-stack { position: absolute; right: -4px; bottom: -5px; min-width: 17px; padding: 0 3px; background: #352c49; border: 1px solid #fff5da; color: #fff5da; border-radius: 4px; font: bold 11px Arial, sans-serif; text-align: center; }
 /* Modal contents take priority over all fixed HUD elements. */
-body:has(.screen:not([style*="none"])) #ui,
-body:has(.screen:not([style*="none"])) #minimap,
-body:has(.screen:not([style*="none"])) #scoreboard,
-body:has(.screen:not([style*="none"])) #room-code-overlay { visibility: hidden; }
+body:has(.screen:not(.upgrade-nonmodal):not([style*="none"])) #ui,
+body:has(.screen:not(.upgrade-nonmodal):not([style*="none"])) #minimap,
+body:has(.screen:not(.upgrade-nonmodal):not([style*="none"])) #scoreboard,
+body:has(.screen:not(.upgrade-nonmodal):not([style*="none"])) #room-code-overlay { visibility: hidden; }
 @media (max-width: 850px) {
     .cls-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
     #hp-wrap, #xp-wrap { width: min(440px, calc(100vw - 30px)); }
@@ -975,9 +981,9 @@ body:has(.screen:not([style*="none"])) #room-code-overlay { visibility: hidden; 
 }
 #run-timer { position: fixed; top: 18px; left: 50%; transform: translateX(-50%); z-index: 100; padding: 7px 14px; border: 2px solid #625c73; border-radius: 7px; background: rgba(247,247,251,.93); color: #352d47; font: 700 18px 'Share Tech Mono', monospace; letter-spacing: 1px; font-variant-numeric: tabular-nums; }
 #run-timer.boss-active { border-color: #e09d28; background: #fff1c4; }
-body:has(.screen:not([style*="none"])) #run-timer, body:has(.screen:not([style*="none"])) #item-slots { visibility: hidden; }
+body:has(.screen:not(.upgrade-nonmodal):not([style*="none"])) #run-timer, body:has(.screen:not(.upgrade-nonmodal):not([style*="none"])) #item-slots { visibility: hidden; }
 @media (max-width: 500px) { #run-timer { top: 54px; padding: 5px 9px; font-size: 15px; } }
-body:has(.screen:not([style*="none"])) #ui { opacity: 0; }
+body:has(.screen:not(.upgrade-nonmodal):not([style*="none"])) #ui { opacity: 0; }
 .game-icon.small-icon { width:20px; height:20px; vertical-align:middle; }
 
 /* Pointer controls share the game's outlined, flat artwork. */
@@ -986,7 +992,7 @@ body:has(.screen:not([style*="none"])) #ui { opacity: 0; }
 #world-portal { position: fixed; left: 50%; top: 72px; transform: translateX(-50%); z-index: 150; max-width: calc(100vw - 32px); min-height: 44px; padding: 8px 18px; border: 3px solid #60478a; border-radius: 10px; background: #dbc2ff; color: #352d47; font: 700 17px 'Rajdhani', sans-serif; cursor: pointer; }
 #world-portal[hidden] { display: none; }
 #world-portal:disabled { border-color: #777080; background: #e3dfea; color: #625a6d; cursor: default; }
-body:has(.screen:not([style*="none"])) #world-label, body:has(.screen:not([style*="none"])) #world-portal { visibility: hidden; }
+body:has(.screen:not(.upgrade-nonmodal):not([style*="none"])) #world-label, body:has(.screen:not(.upgrade-nonmodal):not([style*="none"])) #world-portal { visibility: hidden; }
 #touch-controls { position: fixed; inset: 0; z-index: 150; pointer-events: none; user-select: none; -webkit-user-select: none; }
 #touch-controls[hidden], #touch-portal[hidden] { display: none !important; }
 #touch-stick { position: absolute; left: max(18px, env(safe-area-inset-left)); bottom: max(20px, env(safe-area-inset-bottom)); width: 132px; height: 132px; border: 3px solid #514960; border-radius: 50%; background: rgba(249,247,255,.65); box-shadow: inset 0 0 0 12px rgba(123,106,160,.08); pointer-events: auto; touch-action: none; }
@@ -996,7 +1002,7 @@ body:has(.screen:not([style*="none"])) #world-label, body:has(.screen:not([style
 #touch-portal { bottom: max(28px, env(safe-area-inset-bottom)); right: max(20px, env(safe-area-inset-right)); min-width: 82px; height: 64px; padding: 8px; border-color: #60478a; background: #dbc2ff; }
 #touch-portal:disabled { background: #ddd9e7; border-color: #777080; color: #625a6d; }
 #touch-menu:focus-visible, #touch-portal:focus-visible { outline: 3px solid #2787e0; outline-offset: 3px; }
-body:has(.screen:not([style*="none"])) #touch-controls { visibility: hidden; }
+body:has(.screen:not(.upgrade-nonmodal):not([style*="none"])) #touch-controls { visibility: hidden; }
 .room-menu-panel { display: flex; flex-direction: column; gap: 18px; width: min(380px, calc(100vw - 32px)); text-align: center; }
 .room-menu-panel .s-title { font-size: 34px; }
 .room-menu-panel .btn { min-height: 48px; margin: 0; width: 100%; }
@@ -1043,16 +1049,14 @@ body:has(.screen:not([style*="none"])) #touch-controls { visibility: hidden; }
     .screen .panel-box { padding: 12px; }
     #s-lobby { grid-template-columns: minmax(160px, 1fr) minmax(180px, 1fr); gap: 8px 20px; align-content: center; padding: 14px max(24px, env(safe-area-inset-right)); }
     #s-lobby[style*="flex"] { display: grid !important; }
-    #s-lobby .s-title, #s-lobby .s-sub, #s-lobby .panel-box, #s-lobby #perm-disp-lobby { grid-column: 1; margin: 0; }
+    #s-lobby .s-title, #s-lobby .s-sub, #s-lobby .panel-box { grid-column: 1; margin: 0; }
     #s-lobby .lobby-grid { grid-column: 2; grid-row: 1 / span 2; display: flex; flex-direction: column; gap: 8px; }
-    #s-lobby #btn-offline { grid-column: 2; grid-row: 3; }
-    #s-lobby #btn-create-room { grid-column: 2; grid-row: 4; }
+    #s-lobby .lobby-actions { grid-column: 2; grid-row: 3 / span 2; gap: 8px; }
     #s-lobby .lobby-btn { min-height: 44px; padding: 8px; width: 100%; margin: 0; }
     #s-menu .cls-grid { max-height: calc(100dvh - 110px); grid-template-columns: repeat(5, minmax(0, 1fr)); }
     #s-menu .cls-card { padding: 7px; }
     #s-menu .cls-emoji .game-icon { width: 30px; height: 30px; }
     #s-menu .cls-desc { font-size: 9px; }
-    #s-menu #perm-disp { font-size: 10px; }
     .up-card { min-height: 190px; }
     .touch-input #hp-wrap, .touch-input #xp-wrap { width: 220px; }
     .touch-input #world-label { left: 100px; top: calc(max(12px, env(safe-area-inset-top)) + 51px); }
@@ -1065,3 +1069,61 @@ body:has(.screen:not([style*="none"])) #touch-controls { visibility: hidden; }
     #touch-stick { width: 116px; height: 116px; bottom: max(14px, env(safe-area-inset-bottom)); }
     #touch-portal { bottom: max(20px, env(safe-area-inset-bottom)); height: 56px; }
 }
+
+/* Level-up cards stay alongside live play, leaving both the HUD and stick usable. */
+#s-upgrade.upgrade-nonmodal {
+    inset: 66px 16px auto;
+    max-height: calc(100dvh - 230px);
+    padding: 0 !important;
+    overflow: visible;
+    touch-action: auto;
+}
+#s-upgrade.upgrade-nonmodal .s-title { font-size: 26px; margin-bottom: 0; text-shadow: 0 1px #fff; }
+#s-upgrade.upgrade-nonmodal .s-sub { margin-bottom: 8px; font-size: 11px; text-shadow: 0 1px #fff; }
+#s-upgrade.upgrade-nonmodal .up-cards { flex-wrap: nowrap; }
+#s-upgrade.upgrade-nonmodal .up-card { min-height: 170px; padding: 8px; }
+#s-upgrade.upgrade-nonmodal .up-icon .game-icon { width: 40px; height: 40px; }
+.touch-input #s-upgrade.upgrade-nonmodal { inset: 228px 8px auto; max-height: calc(100dvh - 388px); }
+.touch-input #s-upgrade.upgrade-nonmodal .s-title { font-size: 21px; }
+.touch-input #s-upgrade.upgrade-nonmodal .s-sub { font-size: 9px; margin-bottom: 4px; }
+.touch-input #s-upgrade.upgrade-nonmodal .up-cards { width: 100%; flex-wrap: nowrap; gap: 6px; }
+.touch-input #s-upgrade.upgrade-nonmodal .up-card { width: min(145px, calc((100% - 12px) / 3)); min-height: 118px; padding: 4px; touch-action: none; }
+.touch-input #s-upgrade.upgrade-nonmodal .up-icon { margin-bottom: 1px; }
+.touch-input #s-upgrade.upgrade-nonmodal .up-icon .game-icon { width: 24px; height: 24px; }
+.touch-input #s-upgrade.upgrade-nonmodal .up-wname { font-size: 7px; letter-spacing: 0; margin-bottom: 1px; }
+.touch-input #s-upgrade.upgrade-nonmodal .up-name { font-size: 10px; line-height: 1.15; margin-bottom: 2px; }
+.touch-input #s-upgrade.upgrade-nonmodal .up-desc { min-height: 0; font-size: 9px; line-height: 1.15; margin-bottom: 2px; }
+.touch-input #s-upgrade.upgrade-nonmodal .up-val { font-size: 9px; margin-bottom: 1px; }
+.touch-input #s-upgrade.upgrade-nonmodal .up-rar { padding: 1px 4px; border-width: 1px; font-size: 8px; letter-spacing: .3px; }
+@media (orientation: landscape) and (max-height: 600px) {
+    .touch-input #s-upgrade.upgrade-nonmodal { inset: 68px 76px auto 250px; max-height: calc(100dvh - 145px); }
+    .touch-input #s-upgrade.upgrade-nonmodal .up-card { min-height: 150px; }
+}
+@media (orientation: portrait) and (max-height: 640px) {
+    .touch-input #s-upgrade.upgrade-nonmodal { top: 82px; }
+    .touch-input:has(#s-upgrade.upgrade-nonmodal:not([style*="none"])) :is(#world-label, #run-timer, #minimap, #w-slots, #b-slots, #item-slots, #scoreboard) { visibility: hidden; }
+}
+
+[data-equipment-kind] { pointer-events: auto; cursor: help; touch-action: manipulation; }
+[data-equipment-kind]:focus-visible { outline: 3px solid #2787e0; outline-offset: 3px; }
+#equipment-info-layer { position: fixed; inset: max(10px, env(safe-area-inset-top)) max(10px, env(safe-area-inset-right)) max(10px, env(safe-area-inset-bottom)) max(10px, env(safe-area-inset-left)); z-index: 190; pointer-events: none; }
+.equipment-info { position: absolute; width: 310px; max-width: 100%; max-height: 100%; overflow: hidden; padding: 12px 14px; border: 3px solid #51435d; border-radius: 11px; background: #fff9e8; color: #352d47; box-shadow: 0 5px 0 rgba(44, 33, 55, .18); pointer-events: none; text-align: left; }
+.equipment-info[hidden] { display: none !important; }
+.item-slot[data-item-rarity] { box-shadow: inset 0 -3px 0 var(--item-rarity-color); }
+.equipment-info-heading { display: flex; align-items: center; gap: 9px; margin-bottom: 7px; }
+.equipment-info-icon { flex: 0 0 34px; display: grid; place-items: center; }
+.equipment-info-icon .game-icon { width: 34px; height: 34px; }
+.equipment-info-title { font-size: 19px; line-height: 1.15; }
+.equipment-info-description { font-size: 14px; line-height: 1.3; margin-bottom: 7px; }
+.equipment-info-details { list-style: none; display: grid; gap: 3px; font-size: 13px; line-height: 1.25; font-weight: 600; }
+.equipment-info-details[hidden] { display: none; }
+#equipment-reward { border-color: #af811e; background: #fff6cf; }
+body:has(.screen:not(.upgrade-nonmodal):not([style*="none"])) #equipment-info-layer { visibility: hidden; }
+.touch-input .equipment-info { width: 300px; padding: 9px 10px; }
+.touch-input .equipment-info-heading { gap: 7px; margin-bottom: 5px; }
+.touch-input .equipment-info-icon { flex-basis: 28px; }
+.touch-input .equipment-info-icon .game-icon { width: 28px; height: 28px; }
+.touch-input .equipment-info-title { font-size: 17px; }
+.touch-input .equipment-info-description { font-size: 13px; line-height: 1.2; margin-bottom: 5px; }
+.touch-input .equipment-info-details { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 3px 8px; font-size: 12px; line-height: 1.2; }
+.touch-input .equipment-info[data-item-rarity] .equipment-info-details { grid-template-columns: minmax(0, 1fr); }

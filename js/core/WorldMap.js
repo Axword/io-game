@@ -1,4 +1,5 @@
 import { getWorld } from '../../shared/config/worlds.js';
+import { getWorldZones } from '../../shared/systems/worldRules.js';
 import { mkShape, disposeObject } from '../utils/geometry.js';
 
 export class WorldMap {
@@ -14,9 +15,37 @@ export class WorldMap {
         this.group.name = `world-map-${this.world.id}`;
         this.scene.add(this.group);
         const world = this.world, diameter = world.bounds * 2;
-        const ground = new THREE.Mesh(new THREE.PlaneGeometry(diameter, diameter), new THREE.MeshBasicMaterial({ color: world.palette.ground }));
+        this.zones = getWorldZones(worldId);
+        const ground = new THREE.Mesh(new THREE.PlaneGeometry(diameter, diameter), new THREE.MeshBasicMaterial({ color: this.zones[0].color }));
+        ground.name = 'zone-1'; ground.userData.zone = this.zones[0];
         ground.position.z = -15;
         this.add(ground);
+        this.zoneMeshes = [ground]; this.zoneBorders = [];
+        const positions = [], colors = [];
+        const addBand = (inner, outer, z, colorHex) => {
+            const color = new THREE.Color(colorHex);
+            const vertex = (radius, angle) => {
+                positions.push(Math.cos(angle) * radius, Math.sin(angle) * radius, z);
+                colors.push(color.r, color.g, color.b);
+            };
+            for (let segment = 0; segment < 96; segment++) {
+                const a = segment * Math.PI / 48, b = (segment + 1) * Math.PI / 48;
+                vertex(inner, a); vertex(outer, a); vertex(outer, b);
+                vertex(inner, a); vertex(outer, b); vertex(inner, b);
+            }
+        };
+        for (const zone of this.zones.slice(1)) {
+            addBand(zone.minR, zone.maxR, -14.8, zone.color);
+            addBand(zone.maxR - 5, zone.maxR + 5, -13.8, zone.borderColor);
+            this.zoneBorders.push({ id: zone.id, radius: zone.maxR });
+        }
+        // Inner fills and borders stay in one static draw.
+        const zoneGeometry = new THREE.BufferGeometry();
+        zoneGeometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+        zoneGeometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+        const zoneBands = new THREE.Mesh(zoneGeometry, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide }));
+        zoneBands.name = 'world-zone-bands'; zoneBands.userData.zones = this.zones;
+        this.add(zoneBands); this.zoneMeshes.push(zoneBands);
         const grid = new THREE.GridHelper(diameter, 112, world.palette.grid, world.palette.grid);
         grid.rotation.x = Math.PI / 2; grid.position.z = -14;
         this.add(grid);
@@ -112,5 +141,6 @@ export class WorldMap {
         }
         this.group = null; this.portal = null;
         this.portalParts = []; this.orbits = [];
+        this.zoneMeshes = []; this.zoneBorders = []; this.zones = [];
     }
 }

@@ -4,6 +4,7 @@ import { WEAPONS } from '../../shared/config/weapons.js';
 import { BOOKS } from '../../shared/config/books.js';
 import { WORLD, MOVEMENT_MULTIPLIER } from '../../shared/config/constants.js';
 import { xpNeededForLevel, resolveWorldMovement } from '../../shared/systems/worldRules.js';
+import { resetZoneAggro } from '../../shared/systems/zoneAggro.js';
 
 export class ServerPlayer {
     constructor(id, name, cls, permStats = {}, x = 0, y = 0, isBot = false) {
@@ -32,6 +33,7 @@ export class ServerPlayer {
 
         this.weapons = [this.makeWeaponInstance(cd.weapon), null, null, null];
         this.books = [null, null, null, null, null];
+        this.itemRarities = {};
 
         this.armor = 0;
         this.regen = 0;
@@ -119,6 +121,7 @@ export class ServerPlayer {
 
     tryRevive() {
         if (this.hp > 0 || this.revives <= 0) return false;
+        resetZoneAggro(this);
         this.revives--;
         this.hp = Math.max(1, this.maxHp * 0.5);
         this.invTimer = 2;
@@ -143,7 +146,10 @@ export class ServerPlayer {
             }
             this.hp -= damage;
             this.damageAccumulator = 0;
-            if (this.hp <= 0) this.tryRevive();
+            if (this.hp <= 0) {
+                resetZoneAggro(this);
+                this.tryRevive();
+            }
         }
 
         const cdTickMultiplier = this.getCooldownTickMultiplier();
@@ -204,6 +210,7 @@ export class ServerPlayer {
     }
 
     addXp(amount, zoneIdx = -1) {
+        if (zoneIdx === 4 && this.level >= 10) return 0;
         this.xp += amount;
         this.totalXp = (this.totalXp || 0) + amount;
         let levelUps = 0;
@@ -243,6 +250,7 @@ export class ServerPlayer {
 
             hp: Math.round(this.hp),
             maxHp: Math.round(this.maxHp),
+            revives: this.revives || 0,
             isDead: this.isDead || this.hp <= 0,
 
             level: this.level,
@@ -259,8 +267,10 @@ export class ServerPlayer {
             worldId: this.worldId,
             maxLevelReached: Math.max(this.level, this.maxLevelReached || 1),
             finalMoveSpeed: this.getFinalMoveSpeed(),
-            ...(includeLoadout ? { combatStats: Object.fromEntries(['armor','regen','magnetRange','cooldownReduction','areaBonus','critChance','critDamage','damageBonus','attackSpeedBonus','moveSpeedBonus','projectileSpeedBonus','projectileSizeBonus','rangeBonus','luck'].map(key => [key, this[key] || 0])) } : {}),
-            ...(includeLoadout ? { items: { ...(this.items || {}) }, weapons: this.weapons.map(w => w ? {
+            ...(includeLoadout ? { baseHp: this.baseHp, combatStats: Object.fromEntries(['armor','regen','magnetRange','cooldownReduction','areaBonus','critChance','critDamage','damageBonus','attackSpeedBonus','moveSpeedBonus','projectileSpeedBonus','projectileSizeBonus','rangeBonus','luck'].map(key => [key, this[key] || 0])) } : {}),
+            ...(includeLoadout ? { items: { ...(this.items || {}) },
+            itemRarities: Object.fromEntries(Object.entries(this.itemRarities || {}).map(([id, counts]) => [id, [...counts]])),
+            weapons: this.weapons.map(w => w ? {
                 type: w.type,
                 timer: w.timer || 0,
                 upgrades: w.upgrades || {},

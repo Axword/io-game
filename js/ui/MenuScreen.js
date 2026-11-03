@@ -6,7 +6,6 @@ export class MenuScreen {
     constructor(onClassSelect) {
         this.screen = document.getElementById('s-menu');
         this.grid = document.getElementById('cls-grid');
-        this.permDisp = document.getElementById('perm-disp');
         this.onClassSelect = onClassSelect;
         this.selectedClass = null;
     }
@@ -31,9 +30,6 @@ export class MenuScreen {
             });
             this.grid.appendChild(el);
         }
-        
-        this.permDisp.textContent = 
-            `Permanentne: Szczęście +${permStats.luck}%  Prędkość +${permStats.speed}%  HP +${permStats.hp}`;
         
         this.screen.style.display = 'flex';
     }

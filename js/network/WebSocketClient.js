@@ -171,9 +171,10 @@ export class WebSocketClient {
         if (!this.connected || !this.playerId) return;
         this.send('input', inputData);
     }
-    sendUpgradeSelect(upgradeKey) {
-        if (!this.connected || !this.playerId) return;
-        this.send('upgradeSelect', { upgradeKey });
+    sendUpgradeSelect(upgradeKey, offerId) {
+        if (!this.connected || !this.playerId) return false;
+        this.send('upgradeSelect', { upgradeKey, offerId });
+        return true;
     }
 
     sendPing(t) {

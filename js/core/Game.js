@@ -1,4 +1,4 @@
-import { ZONES, SPAWN_POINTS, WORLD, BOSS_TYPES, MOVEMENT_MULTIPLIER } from '../../js/config/constants.js';
+import { ZONES, WORLD, BOSS_TYPES, MOVEMENT_MULTIPLIER } from '../../js/config/constants.js';
 import { WEAPONS } from '../../js/config/weapons.js';
 import { BOOKS } from '../../js/config/books.js';
 import { CLASSES } from '../../js/config/classes.js';
@@ -18,12 +18,14 @@ import { Room } from './Room.js';
 import { getZoneIdx } from '../../js/utils/math.js';
 import { LootSystem } from '../systems/LootSystem.js';
 import { rollItemCards, applyItem, evolveWeapons } from '../../shared/systems/items.js';
+import { resetZoneAggro } from '../../shared/systems/zoneAggro.js';
 import { disposeObject } from '../utils/geometry.js';
 import { WorldMap } from './WorldMap.js';
 import { WORLDS, getWorld, enemyById } from '../../shared/config/worlds.js';
-import { resolveWorldMovement } from '../../shared/systems/worldRules.js';
+import { resolveWorldMovement, getWorldEdgeSpawn, getWorldZone } from '../../shared/systems/worldRules.js';
 import { loadWorldProgress, saveWorldProgress } from '../utils/progression.js';
 import { shouldRetireProjectile } from '../../shared/systems/projectileBounds.js';
+import { describeLootReward } from '../ui/EquipmentDescriptions.js';
 
 export class Game {
     constructor(renderer, inputManager, hud, permStats, wsClient) {
@@ -49,6 +51,7 @@ export class Game {
         this.unlockedWorlds = [0];
         this.campaignMode = true;
         this.paused = false;
+        this.rewardNotices = [];
         this.soloDuration = 480;
         this.soloMode = false;
         this.runStats = { bossesDefeated: 0, chestsOpened: 0 };
@@ -69,6 +72,8 @@ export class Game {
 
         this.gameTime = 0;
         this.pendingUpgrades = 0;
+        this.upgradeOfferId = null;
+        this.upgradeSelectionPending = false;
         this.escapePressed = false;
         this.onlineMode = false;
         this.serverStateBuffer = null;
@@ -86,6 +91,29 @@ export class Game {
         window.BOOKS = BOOKS;
         window.CLASSES = CLASSES;
         window.gameInstance = this;
+    }
+
+    notifyLoot(card, delay = 0) {
+        const description = describeLootReward(card, this.player) || {
+            title: card.name || 'Przedmiot', description: card.desc || '', details: [], icon: card.itemId || 'chest'
+        };
+        if (delay <= 0) this.hud.showReward?.(description);
+        else {
+            this.rewardNotices.push({ description, remaining: delay });
+            if (this.rewardNotices.length > 8) this.rewardNotices.shift();
+        }
+    }
+
+    updatePresentation(dt) {
+        for (let i = 0; i < this.rewardNotices.length; i++) {
+            const notice = this.rewardNotices[i];
+            notice.remaining -= dt;
+            if (notice.remaining <= 0) {
+                this.rewardNotices.splice(i--, 1);
+                this.hud.showReward?.(notice.description);
+            }
+        }
+        this.hud.updatePresentation?.(dt);
     }
 
     async start(classId, mode = 'online', playerName = '', config = {}) {
@@ -119,7 +147,7 @@ export class Game {
         const roomPermStats = this.room.getPermanentStats(playerName);
         const playerPermStats = { ...this.permStats, ...roomPermStats };
 
-        const spawnPoint = { x: 0, y: -180 };
+        const spawnPoint = getWorldEdgeSpawn(this.worldId);
         this.player = new Player(classId, playerPermStats, this.scene, false, spawnPoint.x, spawnPoint.y);
         this.player.totalXp = 0;
         this.player.name = playerName || 'Gracz';
@@ -127,6 +155,7 @@ export class Game {
         this.player.soloMode = this.soloMode;
         this.player.worldId = this.worldId;
         this.player.maxLevelReached = this.maxLevelReached;
+        this.player.invTimer = 2;
         this.weaponSystem.setupAura(this.player);
 
         if (this.onlineMode) {
@@ -144,6 +173,8 @@ export class Game {
         this.state = 'playing';
         this.gameTime = 0;
         this.pendingUpgrades = 0;
+        this.upgradeOfferId = null;
+        this.upgradeSelectionPending = false;
     }
 
     async startOnline(classId, playerName, config) {
@@ -160,6 +191,11 @@ export class Game {
         this.wsClient.onFx = (msg) => this.handleServerFx(msg.data);
         this.wsClient.onWorldChanged = msg => this.handleWorldChanged(msg.data || msg);
         this.wsClient.onItemCollected = msg => {
+            if (msg.data.chest) this.lootSystem.open(msg.data.chest);
+            this.notifyLoot({ type: msg.data.type || 'item', itemId: msg.data.itemId, name: msg.data.item,
+                desc: msg.data.description, stacks: msg.data.stacks, totalStacks: msg.data.totalStacks,
+                itemRarity: msg.data.itemRarity, totalItemRarities: msg.data.totalItemRarities },
+                msg.data.chest ? this.lootSystem.openingDuration : 0);
             this.hud.addKillFeed(`${msg.data.item} ×${msg.data.stacks}`);
             for (const name of msg.data.evolutions || []) this.hud.addKillFeed(name);
         };
@@ -223,9 +259,9 @@ export class Game {
     }
 
     handleServerUpgradeDone(msg) {
-        console.log('[Game] upgradeDone:', msg);
-
         this.pendingUpgrades = 0;
+        this.upgradeOfferId = null;
+        this.upgradeSelectionPending = false;
         this.state = 'playing';
 
         this.upgradeCards = null;
@@ -248,6 +284,8 @@ export class Game {
     }
 
     clearWorldActors() {
+        this.rewardNotices.length = 0;
+        this.hud.clearEquipmentInfo?.();
         this.spawnSystem.reset({ solo: this.soloMode, worldId: this.worldId, difficulty: this.startConfig?.difficulty || 'medium' });
         for (const entity of [...this.monsters, ...this.bullets, ...this.xpOrbs, ...this.bots, ...this.bosses]) entity.destroy?.();
         for (const effect of this.fxList) disposeObject(effect.mesh);
@@ -261,7 +299,7 @@ export class Game {
     }
 
     travelWorld(targetWorldId = this.getPortalState().targetWorldId) {
-        if (!this.player || this.player.hp <= 0 || this.state !== 'playing' || this.paused) return false;
+        if (!this.player || this.player.hp <= 0 || !['playing', 'upgrade'].includes(this.state) || this.paused) return false;
         const portal = this.getPortalState();
         if (targetWorldId !== portal.targetWorldId || portal.locked || !portal.near) return false;
         if (this.onlineMode) {
@@ -273,7 +311,8 @@ export class Game {
         this.worldTime = 0;
         this.worldBossesDefeated = 0;
         this.player.worldId = targetWorldId;
-        this.player.x = 0; this.player.y = -180;
+        const spawnPoint = getWorldEdgeSpawn(targetWorldId);
+        this.player.x = spawnPoint.x; this.player.y = spawnPoint.y;
         this.player.invTimer = 2;
         this.player.damageAccumulator = 0;
         this.player.updatePosition(3, 2.9);
@@ -489,7 +528,10 @@ export class Game {
         if (!entity || !state) return;
         entity.syncTelegraph?.(state);
         if (state.items) entity.items = { ...state.items };
+        if (state.itemRarities) entity.itemRarities = Object.fromEntries(Object.entries(state.itemRarities).map(([id, counts]) => [id, [...counts]]));
         if (state.combatStats) Object.assign(entity, state.combatStats);
+        if (Number.isFinite(state.baseHp)) entity.baseHp = state.baseHp;
+        if (Number.isFinite(state.revives)) entity.revives = state.revives;
         if (Number.isFinite(state.finalMoveSpeed)) entity.serverMoveSpeed = state.finalMoveSpeed;
         if (state.worldId !== undefined) entity.worldId = state.worldId;
         if (state.maxLevelReached !== undefined) entity.maxLevelReached = state.maxLevelReached;
@@ -609,7 +651,8 @@ export class Game {
         const m = new Monster(s.x, s.y, s.zoneIdx ?? 0, ZONES, this.scene, 1.0, false);
         if (s.archetypeId) {
             m.isElite = !!s.isElite;
-            m.configureArchetype(enemyById(s.archetypeId, s.worldId), s.worldId, 0, {});
+            m.configureArchetype(enemyById(s.archetypeId, s.worldId), s.worldId, 0,
+                { zoneId: s.zoneId, visualSize: s.sz, visualColor: s.col });
             m.id = s.id;
             m.hp = s.hp ?? m.hp;
             m.maxHp = s.maxHp ?? m.maxHp;
@@ -687,21 +730,23 @@ export class Game {
     }
 
     handleServerLevelUp(msg) {
-        this.pendingUpgrades = msg.data.pendingUpgrades || 1;
+        if (Number.isFinite(msg.data?.pendingUpgrades)) this.pendingUpgrades = msg.data.pendingUpgrades;
     }
 
     handleServerUpgradeOptions(msg) {
         const data = msg.data || {};
-
-        console.log('[Game] upgradeOptions:', data);
 
         if (data.pendingUpgrades !== undefined) {
             this.pendingUpgrades = data.pendingUpgrades;
         }
 
         if (data.cards && data.cards.length > 0) {
+            // The server may report more XP while a submitted choice is in flight.
+            // That changes the queue length, not the currently displayed offer.
+            if (data.offerId !== undefined && data.offerId === this.upgradeOfferId) return;
             this.state = 'upgrade';
-
+            this.upgradeSelectionPending = false;
+            this.upgradeOfferId = data.offerId;
             this.upgradeCards = data.cards;
             this.upgradeCardsDirty = true;
 
@@ -710,6 +755,8 @@ export class Game {
         }
     }
     handleServerPlayerDead(msg) {
+        this.rewardNotices.length = 0;
+        this.hud.clearEquipmentInfo?.();
         const data = msg.data || {};
 
         console.log('[Game] playerDead:', data);
@@ -717,6 +764,8 @@ export class Game {
         this.state = 'dead';
         this.deathData = data;
         this.pendingUpgrades = 0;
+        this.upgradeOfferId = null;
+        this.upgradeSelectionPending = false;
 
         this.upgradeCards = null;
         window.gameInstance.upgradeCards = null;
@@ -747,6 +796,8 @@ export class Game {
         }
 
         this.pendingUpgrades = 0;
+        this.upgradeOfferId = null;
+        this.upgradeSelectionPending = false;
         this.state = 'playing';
         this.deathData = null;
 
@@ -791,8 +842,16 @@ export class Game {
    }
     update(dt) {
         if (!this.player) return null;
+        this.lootSystem.updateEffects(dt);
         if (!this.onlineMode && this.paused) return null;
-        if (!this.onlineMode && this.state !== 'playing') return null;
+        if (!this.onlineMode && this.state === 'loot-opening') {
+            if (!this.lootSystem.isOpening(this.activeChest?.id)) {
+                this.state = 'loot';
+                return this.lootCards;
+            }
+            return null;
+        }
+        if (!this.onlineMode && !['playing', 'upgrade'].includes(this.state)) return null;
         this.worldMap.update(dt);
         this.worldMap.setPortalState?.(this.getPortalState());
 
@@ -867,12 +926,12 @@ export class Game {
         this.cleanupDead();
 
         if (this.player.hp <= 0) return this.onPlayerDeath();
-        const chest = this.lootSystem.update(dt, this.player, this.worldTime, this.soloMode);
+        const chest = this.lootSystem.update(dt, this.player, this.worldTime, this.soloMode && this.state === 'playing');
         if (chest) {
             this.activeChest = chest;
             this.lootCards = rollItemCards(this.player, chest.rare);
-            this.state = 'loot';
-            return this.lootCards;
+            this.state = 'loot-opening';
+            return null;
         }
         if (this.soloMode && (!this.campaignMode || this.worldId === WORLDS.length - 1) && this.worldTime >= this.soloDuration && this.worldBossesDefeated >= 3 && this.bosses.length === 0 && this.spawnSystem.bossWarnings.length === 0) {
             this.state = 'victory';
@@ -1013,7 +1072,7 @@ export class Game {
         for (const orb of this.xpOrbs) {
             if (orb.life <= 0) continue;
             if (orb.update(dt, this.player)) {
-                const zoneIdx = this.soloMode ? -1 : getZoneIdx(this.player.x, this.player.y, ZONES);
+                const zoneIdx = getWorldZone(this.player.x, this.player.y, this.worldId).legacyZoneIdx;
                 const levelUps = this.player.addXp(orb.val, zoneIdx);
                 if (levelUps > 0) this.pendingUpgrades += levelUps;
                 if (this.player.level > this.maxLevelReached) {
@@ -1296,23 +1355,20 @@ export class Game {
     }
     applyUpgrade(card) {
         if (this.onlineMode) {
-            this.wsClient.sendUpgradeSelect(card.upgradeKey);
+            if (this.state !== 'upgrade' || this.upgradeSelectionPending || !this.upgradeCards?.includes(card)) return false;
+            if (this.wsClient.sendUpgradeSelect(card.upgradeKey, this.upgradeOfferId) === false) return false;
+            this.upgradeSelectionPending = true;
 
             this.upgradeCards = null;
             this.upgradeCardsDirty = false;
             window.gameInstance.upgradeCards = null;
 
-            this.pendingUpgrades--;
-
-            if (this.pendingUpgrades <= 0) {
-                this.state = 'playing';
-            }
-
-            return;
+            // Counts and the next offer come only from the authoritative reply.
+            return true;
         }
 
         if (this.state !== 'upgrade' || !this.upgradeCards?.includes(card)) return false;
-        this.upgradeSystem.applyUpgrade(card, this.player, this.weaponSystem);
+        if (this.upgradeSystem.applyUpgrade(card, this.player, this.weaponSystem) === false) return false;
 
         this.pendingUpgrades--;
 
@@ -1334,6 +1390,7 @@ export class Game {
             this.weaponSystem.setupAura(this.player);
         }
         this.hud.addKillFeed(`${card.name} ${card.val || ''}`);
+        this.notifyLoot(card);
         this.lootCards = null;
         this.activeChest = null;
         this.state = 'playing';
@@ -1341,6 +1398,9 @@ export class Game {
     }
 
     onPlayerDeath() {
+        resetZoneAggro(this.player);
+        this.rewardNotices.length = 0;
+        this.hud.clearEquipmentInfo?.();
         this.savePlayerStatsToRoom();
         this.state = 'dead';
         if (this.onlineMode && this.deathData) {
@@ -1369,7 +1429,7 @@ export class Game {
         if (this.soloMode) {
             return this.start(this.player.cls, 'offline', this.playerName, this.startConfig);
         }
-        const spawnPoint = SPAWN_POINTS[Math.floor(Math.random() * SPAWN_POINTS.length)];
+        const spawnPoint = getWorldEdgeSpawn(this.worldId, Math.random, this.bots);
         const playerClass = this.player.cls;
         this.player.destroy();
 
@@ -1391,9 +1451,14 @@ export class Game {
         this.player.killedMonsters = 0;
         this.player.totalDmg = 0;
         this.player.name = this.playerName || 'Gracz';
+        this.player.worldId = this.worldId;
+        this.player.maxLevelReached = this.maxLevelReached;
+        this.player.invTimer = 2;
         this.weaponSystem.setupAura(this.player);
         this.hud.addKillFeed('Odrodzony!');
         this.pendingUpgrades = 0;
+        this.upgradeOfferId = null;
+        this.upgradeSelectionPending = false;
         this.state = 'playing';
     }
 
@@ -1578,6 +1643,8 @@ export class Game {
         if (overlay) overlay.style.display = 'none';
     }
     cleanup() {
+        this.rewardNotices.length = 0;
+        this.hud.clearEquipmentInfo?.();
         this.worldMap.destroy();
         this.paused = false;
         this.inputManager.releaseAll?.();
@@ -1612,5 +1679,7 @@ export class Game {
         this.lootCards = null;
         this.activeChest = null;
         this.pendingUpgrades = 0;
+        this.upgradeOfferId = null;
+        this.upgradeSelectionPending = false;
     }
 }

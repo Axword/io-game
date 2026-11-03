@@ -1,4 +1,13 @@
-// Original run items. Values are per stack; the cap keeps long sessions bounded.
+// Common items retain the original per-stack values. Quality belongs to each
+// acquired stack, so a rare drop never upgrades previously collected copies.
+export const ITEM_RARITIES = Object.freeze([
+    { id: 0, key: 'common', name: 'ZWYKŁY', power: 1, col: '#65716b', bg: '#f2f5f2', border: '#9aa69f', weight: 76, rareWeight: 45 },
+    { id: 1, key: 'uncommon', name: 'NIEPOSPOLITY', power: 1.15, col: '#278345', bg: '#eaf7e9', border: '#65a36c', weight: 18, rareWeight: 30 },
+    { id: 2, key: 'rare', name: 'RZADKI', power: 1.35, col: '#3268c5', bg: '#eaf1ff', border: '#7399dc', weight: 5, rareWeight: 18 },
+    { id: 3, key: 'epic', name: 'EPICKI', power: 1.6, col: '#8e46b9', bg: '#f4eafd', border: '#b17bd0', weight: .9, rareWeight: 6 },
+    { id: 4, key: 'legendary', name: 'LEGENDARNY', power: 2, col: '#ac6b0c', bg: '#fff3d6', border: '#d6a443', weight: .1, rareWeight: 1 }
+].map(Object.freeze));
+
 export const ITEMS = {
     magnet: { name: 'Magnes', icon: 'magnet', desc: '+45 zasięgu zbierania', max: 5, weight: 14, stats: { magnetRange: 45 } },
     clover: { name: 'Koniczyna', icon: 'clover', desc: '+8 szczęścia', max: 5, weight: 12, stats: { luck: 8 } },

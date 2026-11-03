@@ -6,6 +6,7 @@ import { BOOKS } from '../config/books.js';
 import { MOVEMENT_MULTIPLIER } from '../config/constants.js';
 import { BotAI } from './BotAI.js';
 import { xpNeededForLevel, resolveWorldMovement } from '../../shared/systems/worldRules.js';
+import { resetZoneAggro } from '../../shared/systems/zoneAggro.js';
 
 const BOT_NAMES = [
     'Alpha', 'Beta', 'Gamma', 'Delta', 'Sigma',
@@ -42,6 +43,7 @@ export class Player extends Entity {
         // Ekwipunek
         this.weapons = [this.makeWeaponInstance(cd.weapon), null, null, null];
         this.books = [null, null, null, null, null];
+        this.itemRarities = {};
 
         // Globalne statystyki gracza
         this.armor = 0;
@@ -139,15 +141,6 @@ export class Player extends Entity {
         return this.maxHp > 0 ? this.hp / this.maxHp : 0;
     }
 
-    tryRevive() {
-        if (this.hp > 0 || this.revives <= 0) return false;
-
-        this.revives--;
-        this.hp = Math.max(1, this.maxHp * 0.5);
-        this.invTimer = 2;
-        return true;
-    }
-
     update(dt, input, safeRadius, monsters, xpOrbs, upgradeSystem, weaponSystem, allPlayers = []) {
         if (this.isBot) {
             this.updateBot(dt, monsters, xpOrbs, upgradeSystem, weaponSystem, allPlayers);
@@ -183,6 +176,7 @@ export class Player extends Entity {
             this.damageAccumulator = 0;
 
             if (this.hp <= 0) {
+                resetZoneAggro(this);
                 const revived = this.tryRevive();
 
                 if (!revived && this.hp <= 0) {
@@ -204,6 +198,7 @@ export class Player extends Entity {
     tryRevive() {
         if (this.hp > 0 || this.revives <= 0) return false;
 
+        resetZoneAggro(this);
         this.revives--;
         this.hp = Math.max(1, this.maxHp * 0.5);
         this.invTimer = 2;
@@ -301,6 +296,7 @@ export class Player extends Entity {
     }
 
     addXp(amount, zoneIdx = -1) {
+        if (zoneIdx === 4 && this.level >= 10) return 0;
         this.xp += amount;
         this.totalXp = (this.totalXp || 0) + amount;
         let levelUps = 0;

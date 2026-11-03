@@ -67,4 +67,3 @@ export function enemyById(id, worldId = 0) {
 }
 
 export const PORTAL_RADIUS = 100;
-export const WORLD_SPAWN = Object.freeze({ x: 0, y: -180 });

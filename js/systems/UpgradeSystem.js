@@ -313,7 +313,9 @@ export class UpgradeSystem {
 
     applyUpgrade(card, player, weaponSystem) {
         if (card.type === 'newWeapon') {
+            if (player.weapons.some(w => w?.type === card.weaponType)) return false;
             const slot = player.weapons.findIndex(w => w === null);
+            if (slot < 0) return false;
             if (slot > -1) {
                 player.weapons[slot] = player.makeWeaponInstance(card.weaponType);
                 if (card.weaponType === 'aura') {
@@ -324,13 +326,18 @@ export class UpgradeSystem {
             if (!player.books) {
                 player.books = [null, null, null, null, null];
             }
+            if (player.books.some(b => b?.type === card.bookType)) return false;
             const slot = player.books.findIndex(b => b === null);
+            if (slot < 0) return false;
             if (slot > -1) {
                 player.books[slot] = player.makeBookInstance(card.bookType);
                 this.applyBookStats(player, card.bookType);
             }
         } else if (card.type === 'weaponUpgrade') {
-            const weapon = card.itemRef;
+            // Cards can outlive a loadout synchronization. Apply to the owned
+            // instance, never to the detached object captured when rolling it.
+            const weapon = player.weapons.find(w => w?.type === card.itemTypeId);
+            if (!weapon) return false;
 
             if (!weapon.appliedUpgrades) {
                 weapon.appliedUpgrades = new Set();
@@ -341,6 +348,7 @@ export class UpgradeSystem {
 
             // Oznacz jako zastosowany
             if (!card.isDuplicate) {
+                if (weapon.appliedUpgrades.has(card.upgradeKey)) return false;
                 weapon.appliedUpgrades.add(card.upgradeKey);
                 // Zwiększ licznik nałożeń tego upgradu
                 weapon.upgradeApplyCount[card.upgradeId] = (weapon.upgradeApplyCount[card.upgradeId] || 0) + 1;
@@ -356,13 +364,15 @@ export class UpgradeSystem {
                 weapon.upgrades[statName] = current * (1 + card.value / 100);
             }
         } else if (card.type === 'bookUpgrade') {
-            const book = card.itemRef;
+            const book = player.books?.find(b => b?.type === card.itemTypeId);
+            if (!book) return false;
 
             if (!book.appliedUpgrades) {
                 book.appliedUpgrades = new Set();
             }
 
             if (!card.isDuplicate) {
+                if (book.appliedUpgrades.has(card.upgradeKey)) return false;
                 book.appliedUpgrades.add(card.upgradeKey);
             }
 
@@ -376,7 +386,8 @@ export class UpgradeSystem {
             }
 
             this.applyBookStats(player, card.itemTypeId);
-        }
+        } else return false;
+        return true;
     }
 
     applyBookStats(player, bookType) {

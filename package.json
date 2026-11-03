@@ -1,17 +1,24 @@
 {
-  "name": "arena-io",
+  "name": "vamps-io",
   "version": "1.1.0",
   "private": true,
   "type": "module",
   "scripts": {
     "start": "node server/server.js",
     "start:solo": "node scripts/serve.mjs",
+    "build:static": "node scripts/build-static.mjs",
     "test": "node --test tests/*.test.mjs",
     "test:solo": "node tests/solo-runs.mjs",
     "test:browser": "node tests/browser-qa.mjs",
     "test:multiplayer": "node tests/multiplayer-load.mjs",
     "test:campaign": "node tests/world-campaign.mjs",
     "test:mobile": "node tests/mobile-qa.mjs",
+    "test:levelup": "node tests/levelup-browser-qa.mjs",
+    "test:menu": "node tests/menu-browser-qa.mjs",
+    "test:zones": "node tests/zones-browser-qa.mjs",
+    "test:equipment": "node tests/equipment-browser-qa.mjs",
+    "test:progression": "node tests/progression-fixes-browser-qa.mjs",
+    "test:balance": "node --test tests/baseline-balance.test.mjs tests/combat-baseline-regression.test.mjs",
     "test:world-load": "node tests/worlds-multiplayer-load.mjs"
   },
   "dependencies": {

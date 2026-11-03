@@ -248,7 +248,7 @@ export class WeaponSystem {
         b.pierce = 999; // Przechodzi przez wszystko
 
         // Przebuduj mesh na nowy rozmiar
-        if (b.mesh) this.scene.remove(b.mesh);
+        if (b.mesh) disposeObject(b.mesh);
         const geo = new THREE.PlaneGeometry(range, width);
         const mat = new THREE.MeshBasicMaterial({
             color: 0xff00ff, transparent: true, opacity: 0.75, side: THREE.DoubleSide
@@ -259,7 +259,7 @@ export class WeaponSystem {
         this.scene.add(b.mesh);
 
         // Glow
-        if (b.glow) this.scene.remove(b.glow);
+        if (b.glow) disposeObject(b.glow);
         const glowGeo = new THREE.PlaneGeometry(range, width * 3);
         b.glow = new THREE.Mesh(glowGeo, new THREE.MeshBasicMaterial({
             color: 0xff00ff, transparent: true, opacity: 0.12, side: THREE.DoubleSide

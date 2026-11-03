@@ -35,5 +35,6 @@ export function estimatePlayerDps(player) {
 export function balancedBossHealth(baseHp, participants = [], hpMultiplier = 1) {
     const dps = participants.reduce((total, player) => total + estimatePlayerDps(player), 0);
     const living = participants.filter(player => player?.hp > 0).length;
-    return Math.round(Math.min(3_000_000 * Math.max(1, living), Math.max(baseHp, dps * 12 * hpMultiplier)));
+    const partyBase = baseHp * Math.max(1, living);
+    return Math.round(Math.min(3_000_000 * Math.max(1, living), Math.max(partyBase, dps * 12 * hpMultiplier)));
 }

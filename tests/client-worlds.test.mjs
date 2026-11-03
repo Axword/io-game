@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { makeGame } from './harness.mjs';
 import { XpOrb } from '../js/entities/XpOrb.js';
 import { getWorld } from '../shared/config/worlds.js';
+import { isWorldSpawnClear, xpNeededForLevel } from '../shared/systems/worldRules.js';
 
 test('solo portal requires both earned progression and presence at the central portal', async () => {
     const game = await makeGame(418);
@@ -10,7 +11,8 @@ test('solo portal requires both earned progression and presence at the central p
     game.player.x = 0; game.player.y = 0;
     assert.equal(game.getPortalState().locked, true);
     assert.equal(game.travelWorld(1), false);
-    game.xpOrbs.push(new XpOrb(0, 0, 6600, game.scene));
+    const xpTo30 = Array.from({ length: 29 }, (_, index) => xpNeededForLevel(index + 1)).reduce((sum, xp) => sum + xp, 0);
+    game.xpOrbs.push(new XpOrb(0, 0, xpTo30, game.scene));
     game.updateWorld(.01);
     assert.ok(game.player.level >= 30);
     assert.equal(game.getPortalState().locked, false);
@@ -100,5 +102,69 @@ test('authoritative enemy archetypes and elite rims override local constructor r
         assert.equal(monster.mesh.userData.baseScale, size);
         monster.destroy();
     }
+    game.cleanup();
+});
+
+test('an earned level-up keeps movement and combat time running without replacing the choices', async () => {
+    const game = await makeGame(423);
+    await game.start('archer', 'offline', 'QA', { solo: true });
+    game.xpOrbs.push(new XpOrb(game.player.x, game.player.y, game.player.xpNeeded, game.scene));
+    game.inputManager.keys.KeyD = true;
+    const cards = game.update(.01);
+    assert.equal(game.state, 'upgrade');
+    assert.equal(game.player.level, 2);
+    const before = { x: game.player.x, time: game.worldTime };
+    assert.equal(game.update(.05), null);
+    assert.ok(game.player.x > before.x, 'held movement continues while selecting');
+    assert.ok(game.worldTime > before.time, 'combat keeps advancing');
+    assert.equal(game.upgradeCards, cards, 'the offers remain stable until a selection');
+    assert.equal(game.applyUpgrade(cards[0]), true);
+    assert.equal(game.inputManager.keys.KeyD, true);
+    game.cleanup();
+});
+
+test('solo loot reveals the animated chest before showing its choices and freezes combat during reveal', async () => {
+    const game = await makeGame(424);
+    await game.start('mage', 'offline', 'QA', { solo: true });
+    const chest = game.lootSystem.spawn(game.player.x, game.player.y);
+    assert.equal(game.update(.01), null);
+    assert.equal(game.state, 'loot-opening');
+    assert.equal(game.applyLoot(game.lootCards[0]), false, 'no reward before reveal');
+    const before = { x: game.player.x, y: game.player.y, time: game.worldTime };
+    game.inputManager.keys.KeyD = true;
+    assert.equal(game.update(.3), null);
+    assert.equal(game.lootSystem.isOpening(chest.id), true);
+    assert.ok(chest.lid.rotation.x < -.5);
+    assert.deepEqual({ x: game.player.x, y: game.player.y, time: game.worldTime }, before);
+    const cards = game.update(.6);
+    assert.equal(game.state, 'loot');
+    assert.equal(cards, game.lootCards);
+    assert.equal(game.lootSystem.openings.length, 0);
+    assert.equal(game.applyLoot(cards[0]), true);
+    assert.equal(game.runStats.chestsOpened, 1);
+    game.cleanup();
+    assert.equal(game.scene.children.length, 0);
+});
+
+test('every solo world entry starts safely at a side and portal travel preserves active upgrade choices', async () => {
+    const game = await makeGame(425);
+    await game.start('archer', 'offline', 'QA', { solo: true });
+    const assertEdge = () => {
+        const world = getWorld(game.worldId);
+        assert.ok(Math.max(Math.abs(game.player.x), Math.abs(game.player.y)) >= world.bounds - 260);
+        assert.ok(isWorldSpawnClear(game.player.x, game.player.y, game.worldId, 22));
+    };
+    assertEdge();
+    game.unlockedWorlds = [0, 1, 2];
+    game.pendingUpgrades = 1;
+    const cards = game.update(.01);
+    for (const target of [1, 2, 0]) {
+        game.player.x = 0; game.player.y = 0;
+        assert.equal(game.travelWorld(target), true);
+        assert.equal(game.state, 'upgrade');
+        assert.equal(game.upgradeCards, cards);
+        assertEdge();
+    }
+    assert.equal(game.applyUpgrade(cards[0]), true);
     game.cleanup();
 });

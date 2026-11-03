@@ -16,6 +16,8 @@ test('browser input and upgrade messages use the server protocol envelope exactl
   assert.deepEqual(sent[0], { type: 'input', data: { keys: { KeyD: true }, mouseX: 12, mouseY: 20, mouseClicked: false } });
   client.sendUpgradeSelect('item_ember');
   assert.deepEqual(sent[1], { type: 'upgradeSelect', data: { upgradeKey: 'item_ember' } });
+  client.sendUpgradeSelect('bow_damage_0', 42);
+  assert.deepEqual(sent[2], { type: 'upgradeSelect', data: { upgradeKey: 'bow_damage_0', offerId: 42 } });
 });
 
 function roomWithPlayers(count = 2) {

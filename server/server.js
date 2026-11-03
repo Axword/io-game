@@ -18,7 +18,9 @@ const server = app.listen(SERVER_CONFIG.PORT, () => {
 });
 
 app.use(express.static(path.join(__dirname, '../')));
-app.get('/health', (req, res) => res.json({ ok: true, rooms: gameCache.getAllRooms().length }));
+app.get('/health', (req, res) => res.set('Cache-Control', 'no-store').json({
+    ok: true, rooms: gameCache.getAllRooms().length, revision: process.env.RENDER_GIT_COMMIT || null
+}));
 
 const wss = new WebSocketServer({ server, maxPayload: 16 * 1024 });
 
@@ -282,7 +284,8 @@ function handleUpgradeSelect(ws, data) {
     const player = room.getPlayerBySocket(ws);
     if (!player) return;
 
-    room.applyUpgradeChoice(player.id, data?.upgradeKey);
+    if (!Number.isSafeInteger(data?.offerId)) return;
+    room.applyUpgradeChoice(player.id, data?.upgradeKey, data.offerId);
 }
 
 function handleDisconnect(ws) {

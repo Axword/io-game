@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { getWorldZones } from '../shared/systems/worldRules.js';
 
 export function seededRandom(seed = 1) {
   return () => {
@@ -95,6 +96,14 @@ export function steer(game, memory = {}) {
   }
   if (!goal && nearby.length) goal = nearby[0];
   if (!goal) goal = { x: Math.cos(game.gameTime * 0.025) * 1800, y: Math.sin(game.gameTime * 0.025) * 1800 };
+  if (memory.farmZone && !memory.portalGoal) {
+    const radius = Math.hypot(p.x, p.y);
+    if (radius < memory.farmZone.min + 45 || radius > memory.farmZone.max - 45) {
+      const targetRadius = (memory.farmZone.min + memory.farmZone.max) / 2;
+      const angle = Math.atan2(p.y, p.x);
+      goal = { x: Math.cos(angle) * targetRadius, y: Math.sin(angle) * targetRadius };
+    }
+  }
   if (memory.portalGoal) {
     const clear = (ax, ay, bx, by) => world.obstacles.every(obstacle => {
       const minimum = obstacle.r + 30;
@@ -146,11 +155,18 @@ export function steer(game, memory = {}) {
   }
   const meleeOnly = p.weapons.filter(Boolean).every(w => w.type === 'aura' || w.type === 'sword' || w.type === 'poison');
   const speed = p.getFinalMoveSpeed() * 150;
+  // Keep the probe no farther than its target. A fixed long projection made
+  // fast builds stand still beside a reachable orb because every direction
+  // appeared to overshoot it. Predict the same legal map boundary as movement.
+  const lookAhead = Math.min(.35, Math.hypot(goal.x - p.x, goal.y - p.y) / Math.max(1, speed));
+  const boundary = world.bounds - 22;
   const headings = [[0, 0], ...Array.from({ length: 8 }, (_, i) => [Math.cos(i * Math.PI / 4), Math.sin(i * Math.PI / 4)])];
   let best = headings[0], bestScore = -Infinity;
   const orbitSign = (memory.sign ??= 1);
   for (const [dx, dy] of headings) {
-    const x = p.x + dx * speed * 0.55, y = p.y + dy * speed * 0.55;
+    const rawX = p.x + dx * speed * lookAhead, rawY = p.y + dy * speed * lookAhead;
+    const x = Math.max(-boundary, Math.min(boundary, rawX));
+    const y = Math.max(-boundary, Math.min(boundary, rawY));
     let score = -Math.hypot(goal.x - x, goal.y - y) * (memory.portalGoal ? .65 : .22);
     if (!dx && !dy) score -= 6;
     for (const obstacle of world.obstacles) {
@@ -181,7 +197,7 @@ export function steer(game, memory = {}) {
       const len = Math.hypot(bx, by) || 1;
       score += (dx * -by / len + dy * bx / len) * orbitSign * 12;
     }
-    if (Math.abs(x) > world.bounds - 120 || Math.abs(y) > world.bounds - 120) score -= 1000;
+    if (Math.abs(rawX) > boundary || Math.abs(rawY) > boundary) score -= 15;
     if (memory.last && dx === memory.last[0] && dy === memory.last[1]) score += 5;
     if (score > bestScore) { bestScore = score; best = [dx, dy]; }
   }
@@ -255,6 +271,10 @@ export async function runCampaign({ classId = 'pyromancer', seed = 11, maxTime =
     const portal = game.getPortalState();
     if (!portal.locked && game.worldId < 2 && unlocks[portal.targetWorldId] === undefined) unlocks[portal.targetWorldId] = +game.gameTime.toFixed(2);
     memory.portalGoal = game.worldId < 2 && !portal.locked && (!waitForBosses || (game.worldTime >= 480 && game.worldBossesDefeated >= 3));
+    const localLevel = game.worldId === 0 ? game.player.level : Math.max(10, game.player.level - game.worldMap.world.unlockLevel + 10);
+    const tier = localLevel < 10 ? 0 : localLevel < 30 ? 1 : 2;
+    const farmBand = getWorldZones(game.worldId)[tier];
+    memory.farmZone = { min: farmBand.minR, max: Math.min(game.worldMap.world.bounds, farmBand.maxR) };
     if (memory.portalGoal && portal.near) {
       const previous = game.worldId;
       const defeated = game.worldBossesDefeated;

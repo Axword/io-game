@@ -79,7 +79,7 @@ export async function networkLoad() {
           if (msg.type === 'roomJoined') { roomId = msg.roomId || msg.data.roomId; clearTimeout(timeout); resolve(); }
           if (msg.type === 'error') metric.errors.push(msg.data?.message);
           if (msg.type === 'playerDead') socket.send(JSON.stringify({ type: 'respawn' }));
-          if (msg.type === 'upgradeOptions') { const card = msg.data?.cards?.[0]; if (card) socket.send(JSON.stringify({ type: 'upgradeSelect', data: { upgradeKey: card.upgradeKey } })); }
+          if (msg.type === 'upgradeOptions') { const card = msg.data?.cards?.[0]; if (card) socket.send(JSON.stringify({ type: 'upgradeSelect', data: { upgradeKey: card.upgradeKey, offerId: msg.data.offerId } })); }
           if (msg.type === 'gameState') {
             metric.snapshots++; metric.bytes += raw.length; metric.maxBytes = Math.max(metric.maxBytes, raw.length); metric.times.push(performance.now());
             metric.maxVisiblePlayers = Math.max(metric.maxVisiblePlayers, msg.data.players?.length || 0);

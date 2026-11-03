@@ -24,5 +24,5 @@ export function createStaticServer(port = Number(process.env.PORT || 4173)) {
 }
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const server = await createStaticServer();
-  console.log(`Arena.io: http://127.0.0.1:${server.address().port}`);
+  console.log(`Vamps.io: http://127.0.0.1:${server.address().port}`);
 }

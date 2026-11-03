@@ -75,6 +75,8 @@ export class Monster extends Entity {
         for (const mesh of [this.mesh, this.outline, this.glowRing, this.hpBarBg, this.hpBarFg]) disposeObject(mesh);
         this.glowRing = null;
         configureWorldEnemy(this, archetype, worldId, progress, difficulty);
+        if (Number.isFinite(difficulty.visualSize)) this.sz = difficulty.visualSize;
+        if (Number.isFinite(difficulty.visualColor)) this.col = this.baseColor = difficulty.visualColor;
         this.createMesh(this.type, this.sz, this.baseColor, this.isElite);
         return this;
     }

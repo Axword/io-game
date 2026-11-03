@@ -15,10 +15,6 @@ export class LobbyScreen {
     }
     
     setupListeners() {
-        this.btnOffline?.addEventListener('click', () => {
-            if (!this.validateName()) return;
-            this.onOffline(this.playerName);
-        });
         const nameInput = document.getElementById('player-name');
         nameInput.value = this.playerName;
         nameInput.addEventListener('input', (e) => {
@@ -126,9 +122,6 @@ export class LobbyScreen {
         return document.getElementById('player-name')?.value?.trim() || 'Gracz';
     }    
     show(permStats) {
-        document.getElementById('perm-disp-lobby').textContent =
-            `Permanentne: Szczęście +${permStats.luck}%  Prędkość +${permStats.speed}%  HP +${permStats.hp}`;
-
         if (this.roomConfigScreen) this.roomConfigScreen.style.display = 'none';
         if (this.joinCodeScreen) this.joinCodeScreen.style.display = 'none';
         if (this.waitingRoomScreen) this.waitingRoomScreen.style.display = 'none';

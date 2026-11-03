@@ -60,6 +60,15 @@ try {
         const moved = await page.evaluate(() => ({ x: gameInstance.player.x, y: gameInstance.player.y, movement: arenaApp.inputManager.getMovementVector() }));
         assert.ok(moved.y > start.y + 60, 'native touch joystick moves the player');
         assert.deepEqual(moved.movement, { x: 0, y: 0 }, 'touch release stops movement');
+        // Start/movement are exercised at the real edge spawn. Portal UI uses a
+        // local position fixture; earned campaign travel is tested separately.
+        await page.evaluate(() => { gameInstance.player.x = 0; gameInstance.player.y = -180; gameInstance.player.updatePosition(); });
+        const portalStick = await visibleRect(page, '#touch-stick');
+        const portalCenter = { x: portalStick.x + portalStick.width / 2, y: portalStick.y + portalStick.height / 2, id: 9 };
+        await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [portalCenter] });
+        await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ ...portalCenter, y: portalCenter.y - portalStick.height * .34 }] });
+        await page.waitForTimeout(900);
+        await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
         await page.waitForFunction(() => !document.getElementById('touch-portal').hidden);
         assert.equal(await page.locator('#touch-portal').isDisabled(), true, 'locked portal is visibly disabled');
         const portal = await visibleRect(page, '#touch-portal');
@@ -95,6 +104,7 @@ try {
 
         // Travel through the second real portal and inspect the darkest world
         // with a full inventory, where crowding/contrast problems are clearest.
+        await page.evaluate(() => { gameInstance.player.x = 0; gameInstance.player.y = -180; gameInstance.player.updatePosition(); });
         const secondStick = await visibleRect(page, '#touch-stick');
         const secondCenter = { x: secondStick.x + secondStick.width / 2, y: secondStick.y + secondStick.height / 2, id: 4 };
         await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [secondCenter] });

@@ -1,8 +1,10 @@
 import { iconMarkup } from './Icons.js';
-import { CLASSES } from '../config/classes.js';
-import { ITEMS } from '../../shared/config/items.js';
-import { getZoneIdx } from '../utils/math.js';
+import { describeEquipment } from './EquipmentDescriptions.js';
+import { EquipmentInfo } from './EquipmentInfo.js';
+import { ITEMS, ITEM_RARITIES } from '../../shared/config/items.js';
+import { getItemRarityCounts } from '../../shared/systems/items.js';
 import { getWorld } from '../../shared/config/worlds.js';
+import { getWorldZone, getWorldZones } from '../../shared/systems/worldRules.js';
 
 export class HUD {
     constructor() {
@@ -40,6 +42,7 @@ export class HUD {
             icon: document.querySelector(`#bs${i} .wi`),
             name: document.querySelector(`#bs${i} .wn`)
         }));
+        this.equipmentInfo = new EquipmentInfo(anchor => this.describeSlot(anchor));
         // Rozmiar minimappy z HTML elementu
         this.sz = this.minimap.width || 110;
         
@@ -55,6 +58,7 @@ export class HUD {
 
     update(player, zones) {
         if (!player) return;
+        this.equipmentPlayer = player;
         const now = performance.now();
         if (now - (this._lastHudAt ?? -1000) < 90) return;
         this._lastHudAt = now;
@@ -62,7 +66,7 @@ export class HUD {
         // HP bar
         const hpPct = Math.max(0, player.hp / player.maxHp) * 100;
         this.hpFill.style.width = hpPct + '%';
-        this.hpTxt.textContent = `${Math.ceil(player.hp)} / ${player.maxHp}`;
+        this.hpTxt.textContent = `${Math.ceil(player.hp)} / ${Math.ceil(player.maxHp)}`;
 
         // XP bar
         const xpPct = (player.xp / player.xpNeeded) * 100;
@@ -72,24 +76,19 @@ export class HUD {
 
         // Strefa
         const world = getWorld(window.gameInstance?.worldId || 0);
+        const zone = getWorldZone(player.x, player.y, world.id);
+        const zoneCount = getWorldZones(world.id).length;
         const label = document.getElementById('world-label');
-        if (label && label.textContent !== world.name) label.textContent = world.name;
-        this.zoneTxt.style.display = 'none';
-
-        const centerDist = Math.hypot(player.x, player.y);
-        if (centerDist < 800) {
-            this.zoneTxt.style.color = '#ff0000';
-            this.zoneTxt.style.borderColor = 'rgba(255, 0, 0, .6)';
-            this.zoneTxt.style.background = 'rgba(255, 200, 200, .95)';
-        } else if (centerDist < 1600) {
-            this.zoneTxt.style.color = '#ff6600';
-            this.zoneTxt.style.borderColor = 'rgba(255, 102, 0, .5)';
-            this.zoneTxt.style.background = 'rgba(255, 235, 200, .95)';
-        } else {
-            this.zoneTxt.style.color = '#222';
-            this.zoneTxt.style.borderColor = 'rgba(0, 0, 0, .15)';
-            this.zoneTxt.style.background = 'rgba(255, 255, 255, .85)';
-        }
+        const touch = document.body.classList?.contains?.('touch-input');
+        const worldLabel = touch ? `STREFA ${zone.id}/${zoneCount} · ${world.name}` : world.name;
+        if (label && label.textContent !== worldLabel) label.textContent = worldLabel;
+        if (label) label.title = `${world.name} · STREFA ${zone.id}/${zoneCount} · ${zone.name}`;
+        this.zoneTxt.style.display = 'block';
+        this.zoneTxt.textContent = `STREFA ${zone.id}/${zoneCount} · ${zone.name}`;
+        this.zoneTxt.dataset.zone = String(zone.id);
+        this.zoneTxt.style.color = '#fff8ec';
+        this.zoneTxt.style.borderColor = '#' + zone.borderColor.toString(16).padStart(6, '0');
+        this.zoneTxt.style.background = '#3c3047';
 
         this.updateWeaponSlots(player);
         this.updateBookSlots(player);
@@ -119,6 +118,7 @@ export class HUD {
             if (!slot.el || !slot.icon || !slot.name) continue;
             const weapon = player.weapons[i];
             const data = window.WEAPONS?.[weapon?.type];
+            this.setSlotInfo(slot.el, 'weapon', weapon?.type, i, weapon, player);
             const key = data ? weapon.type + ':' + (weapon.evolved || '') : '';
             if (slot.key === key) continue;
             slot.key = key;
@@ -126,7 +126,6 @@ export class HUD {
             slot.name.textContent = data ? data.name : '';
             slot.el.classList.toggle('active', !!data);
             slot.el.classList.toggle('evolved', !!weapon?.evolved);
-            slot.el.title = weapon?.evolved || data?.name || '';
         }
     }
     updateBookSlots(player) {
@@ -136,6 +135,7 @@ export class HUD {
             if (!slot.el || !slot.icon || !slot.name) continue;
             const book = player.books?.[i];
             const data = books[book?.type];
+            this.setSlotInfo(slot.el, 'book', book?.type, i, book, player);
             const key = data ? book.type + ':' + (book.level || 1) : '';
             if (slot.key === key) continue;
             slot.key = key;
@@ -144,10 +144,8 @@ export class HUD {
             slot.el.classList.toggle('active', !!data);
             if (data) {
                 slot.el.dataset.level = book.level || 1;
-                slot.el.title = this.getBookTooltip(book, data, player);
             } else {
                 slot.el.removeAttribute('data-level');
-                slot.el.title = '';
             }
         }
     }
@@ -155,7 +153,7 @@ export class HUD {
         const container = document.getElementById('item-slots');
         if (!container) return;
         const entries = Object.entries(player.items || {}).filter(([id,count]) => ITEMS[id] && count > 0);
-        const key = JSON.stringify(entries);
+        const key = JSON.stringify([entries, player.itemRarities || {}]);
         if (key === this._itemSlotsKey) return;
         this._itemSlotsKey = key;
         container.replaceChildren();
@@ -163,44 +161,56 @@ export class HUD {
             const item = ITEMS[id];
             const el = document.createElement('div');
             el.className = 'item-slot';
-            el.title = item.name + ' ×' + count + '\n' + item.desc;
-            el.setAttribute('aria-label', el.title);
+            const counts = getItemRarityCounts(player, id);
+            const rarity = ITEM_RARITIES.findLast((tier, index) => counts[index] > 0) || ITEM_RARITIES[0];
+            el.dataset.itemRarity = rarity.key;
+            el.style.borderColor = rarity.border;
+            el.style.background = rarity.bg;
+            el.style.setProperty('--item-rarity-color', rarity.col);
+            this.setSlotInfo(el, 'item', id, null, { stacks: count }, player);
             el.innerHTML = iconMarkup(item.icon) + '<span class="item-stack">' + count + '</span>';
             container.appendChild(el);
         }
     }
 
-    getBookTooltip(book, bookData, player) {
-        const level = book.level || 1;
-        const stats = book.stats || {};
-        let tooltip = `${bookData.name} (Poziom ${level})\n${bookData.desc}\n\n`;
-
-        if (book.type === 'vitality') {
-            const baseHp = CLASSES[player.cls].hp;
-            const bonusHp = Math.round(baseHp * stats.maxHp * level);
-            tooltip += `❤️ +${bonusHp} Max HP`;
-        } else if (book.type === 'speed') {
-            tooltip += `💨 +${Math.round(stats.moveSpeed * 100 * level)}% Prędkość`;
-        } else if (book.type === 'cooldown') {
-            tooltip += `⏰ -${Math.round(stats.cooldownReduction * level)}% Cooldown`;
-        } else if (book.type === 'magnet') {
-            tooltip += `🧲 +${Math.round(stats.magnetRange * level)} Zasięg XP`;
-        } else if (book.type === 'critical') {
-            tooltip += `🎯 +${Math.round(stats.critChance * level)}% Szansa na Krytyk\n`;
-            tooltip += `💥 +${Math.round(stats.critDamage * level)}% Obrażenia Kryt`;
-        } else if (book.type === 'damage') {
-            tooltip += `💥 +${Math.round(stats.damageBonus * level)}% Obrażenia`;
-        } else if (book.type === 'area') {
-            tooltip += `💫 +${Math.round(stats.areaBonus * level)}% Obszar`;
-        } else if (book.type === 'luck') {
-            tooltip += `🍀 +${Math.round(stats.luck * level)} Szczęście`;
-        } else if (book.type === 'revival') {
-            tooltip += `👼 +${Math.round(stats.revives * level)} Dodatkowe życia`;
-        } else if (book.type === 'regeneration') {
-            tooltip += `💚 +${stats.regen * level} HP/s`;
+    setSlotInfo(element, kind, id, index, instance, player) {
+        const data = id && describeEquipment(kind, id, instance, player);
+        element.removeAttribute('title');
+        if (!data) {
+            for (const key of ['equipmentKind', 'equipmentId', 'equipmentIndex']) delete element.dataset[key];
+            element.tabIndex = -1;
+            for (const name of ['role', 'aria-label', 'aria-expanded', 'aria-describedby']) element.removeAttribute(name);
+            return;
         }
+        if (element.dataset.equipmentKind !== kind) element.dataset.equipmentKind = kind;
+        if (element.dataset.equipmentId !== id) element.dataset.equipmentId = id;
+        if (index !== null && element.dataset.equipmentIndex !== String(index)) element.dataset.equipmentIndex = index;
+        if (element.tabIndex !== 0) element.tabIndex = 0;
+        if (element.getAttribute('role') !== 'button') element.setAttribute('role', 'button');
+        const label = [data.title, data.description, ...(data.details || [])].join('. ');
+        if (element.getAttribute('aria-label') !== label) element.setAttribute('aria-label', label);
+    }
 
-        return tooltip;
+    describeSlot(anchor) {
+        const player = this.equipmentPlayer;
+        if (!player) return null;
+        const kind = anchor.dataset.equipmentKind;
+        if (kind === 'item') {
+            const id = anchor.dataset.equipmentId, stacks = player.items?.[id] || 0;
+            return stacks > 0 ? describeEquipment(kind, id, { stacks }, player) : null;
+        }
+        const instance = (kind === 'weapon' ? player.weapons : player.books)?.[Number(anchor.dataset.equipmentIndex)];
+        return instance ? describeEquipment(kind, instance.type, instance, player) : null;
+    }
+
+    showReward(data) { this.equipmentInfo.showReward(data); }
+    updatePresentation(dt) { this.equipmentInfo.update(dt); }
+    hideEquipmentInfo() { this.equipmentInfo.hide(); }
+    clearEquipmentInfo() { this.equipmentInfo.clear(); this.equipmentPlayer = null; }
+
+    getBookTooltip(book, bookData, player) {
+        const data = describeEquipment('book', book.type, book, player);
+        return data ? [data.title, data.description, ...data.details].join('\n') : '';
     }
 
     updatePlayerStats(player) {
@@ -287,10 +297,18 @@ export class HUD {
         const world = getWorld(window.gameInstance?.worldId || 0);
         const ctx = this.minimapCtx, size = this.sz, half = size / 2;
         const scale = (size - 8) / (world.bounds * 2);
+        const zones = getWorldZones(world.id);
         const mapPoint = (x, y) => [half + x * scale, half - y * scale];
         ctx.clearRect(0, 0, size, size);
-        ctx.fillStyle = '#28253a';
+        ctx.fillStyle = '#' + zones[0].color.toString(16).padStart(6, '0');
         ctx.fillRect(0, 0, size, size);
+        for (const zone of zones.slice(1)) {
+            ctx.fillStyle = '#' + zone.color.toString(16).padStart(6, '0');
+            ctx.beginPath(); ctx.arc(half, half, zone.maxR * scale, 0, Math.PI * 2); ctx.fill();
+            ctx.strokeStyle = '#' + zone.borderColor.toString(16).padStart(6, '0');
+            ctx.lineWidth = 1;
+            ctx.stroke();
+        }
         ctx.strokeStyle = '#a6a1b8'; ctx.lineWidth = 1;
         ctx.strokeRect(4, 4, size - 8, size - 8);
         ctx.fillStyle = '#6f6a83';

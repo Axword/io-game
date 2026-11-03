@@ -32,9 +32,8 @@ test('level gates open exactly at 30 and 60 and portal interaction stays local',
     assert.equal(isNearPortal({ x: 0, y: 101 }), false);
     let total = 0;
     for (let level = 1; level < 30; level++) total += xpNeededForLevel(level);
-    assert.equal(total, 6525, 'first gate is reachable without the previous exponential XP wall');
-    assert.ok(xpNeededForLevel(90) < 4000);
-    assert.ok(xpNeededForLevel(90) > 3000, 'late-game progression softens repeated level-up healing');
+    assert.equal(total, 66928, 'level progression follows the original exponential curve');
+    assert.deepEqual([1, 2, 10, 30, 60].map(xpNeededForLevel), [100, 118, 443, 12150, 1741961]);
 });
 
 test('map collision resolves borders, obstacle centers and invalid coordinates finitely', () => {
@@ -54,7 +53,7 @@ test('map collision resolves borders, obstacle centers and invalid coordinates f
 
 test('every enemy archetype advances finite simulation and only attacks its own world', () => {
     for (const world of WORLDS) for (const archetype of world.enemies) {
-        const enemy = configureWorldEnemy({ x: 580, y: -100, isElite: false }, archetype, world.id, .5);
+        const enemy = configureWorldEnemy({ x: 580, y: -100, isElite: false }, archetype, world.id, .5, { zoneAnchor: { x: 0, y: 0 } });
         const shots = [];
         let warned = false;
         for (let frame = 0; frame < 600; frame++) {

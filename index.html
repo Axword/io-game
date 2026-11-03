@@ -3,11 +3,12 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-    <title>Arena.io</title>
+    <title>Vamps.io</title>
     <link rel="stylesheet" href="css/styles2.css">
 </head>
 <body>
     <canvas id="gc"></canvas>
+    <canvas id="menu-backdrop" aria-hidden="true" hidden></canvas>
     <div id="world-label" aria-live="polite"></div>
     <button id="world-portal" type="button" hidden></button>
     
@@ -54,15 +55,14 @@
         <div id="scoreboard-list"></div>
     </div>
 
-    <div class="screen" id="s-menu">
-        <div class="s-title title-gradient">ARENA.IO</div>
+    <div class="screen" id="s-menu" style="display:none">
+        <div class="s-title title-gradient">VAMPS.IO</div>
         <div class="s-sub">wybierz klasę postaci</div>
         <div class="cls-grid" id="cls-grid"></div>
-        <div id="perm-disp"></div>
     </div>
 
     <div class="screen" id="s-lobby" style="display:none">
-        <div class="s-title title-gradient">ARENA.IO</div>
+        <div class="s-title title-gradient">VAMPS.IO</div>
         <div class="s-sub">panel gracza</div>
 
         <div class="panel-box">
@@ -76,9 +76,11 @@
             <button class="lobby-btn btn-join" id="btn-join-code"><img class="game-icon small-icon" src="assets/icons/prism.svg" alt=""> Dołącz przez Kod</button>
         </div>
 
-        <button class="lobby-btn btn-create" id="btn-offline">Graj solo</button><button class="lobby-btn btn-create" id="btn-create-room"><img class="game-icon small-icon" src="assets/icons/chest.svg" alt=""> Stwórz Pokój</button>
+        <div class="lobby-actions">
+            <button class="lobby-btn btn-create" id="btn-offline">Graj solo</button>
+            <button class="lobby-btn btn-create" id="btn-create-room"><img class="game-icon small-icon" src="assets/icons/chest.svg" alt=""> Stwórz Pokój</button>
+        </div>
 
-        <div id="perm-disp-lobby" class="input-hint mt-24"></div>
     </div>
 
     <div class="screen" id="s-room-config" style="display:none">

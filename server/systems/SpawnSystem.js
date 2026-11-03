@@ -4,9 +4,10 @@ import { ServerXpOrb } from '../entities/xpOrb.js';
 import { rng, getZoneIdx } from '../../shared/utils/math.js';
 import { BOSS_TYPES, DIFFICULTY_CONFIG, ZONES, VIEW, WORLD } from '../../shared/config/constants.js';
 import { getWorld } from '../../shared/config/worlds.js';
-import { configureWorldEnemy } from '../../shared/systems/enemyBehavior.js';
+import { configureWorldEnemy, constrainDormantEnemy } from '../../shared/systems/enemyBehavior.js';
 import { resolveWorldMovement } from '../../shared/systems/worldRules.js';
 import { balancedBossHealth } from '../../shared/systems/encounterBalance.js';
+import { recordZoneEntry } from '../../shared/systems/zoneAggro.js';
 
 export class SpawnSystem {
     constructor(zones) {
@@ -69,9 +70,8 @@ export class SpawnSystem {
             const totalWeight = world.enemies.reduce((sum, enemy) => sum + enemy.weight, 0);
             let roll = Math.random() * totalWeight;
             const archetype = world.enemies.find(enemy => (roll -= enemy.weight) <= 0) || world.enemies[0];
-            const difficulty = { easy: { hp: 0.8, damage: 0.75 }, medium: { hp: 1, damage: 1 },
-                hard: { hp: 1.25, damage: 1.2 }, extreme: { hp: 1.55, damage: 1.45 } }[this.difficulty];
-            configureWorldEnemy(monster, archetype, this.worldId, this.gameTime / 480, difficulty);
+            const difficulty = { hp: this.getDifficultyMultipliers().hpMult, damage: 1 };
+            configureWorldEnemy(monster, archetype, this.worldId, this.gameTime / 480, { ...difficulty, zoneAnchor: player });
             monsters.push(monster);
             return monster;
         }
@@ -89,13 +89,12 @@ export class SpawnSystem {
         const participants = humans.filter(human => Math.hypot(human.x - position.x, human.y - position.y) <= 1400);
         if (!participants.includes(player) && !player.isBot) participants.push(player);
         const phase = (this.bossIndex - 1) % 3;
-        const difficulty = { easy: { hp: 0.8, damage: 0.75 }, medium: { hp: 1, damage: 1 },
-            hard: { hp: 1.25, damage: 1.2 }, extreme: { hp: 1.55, damage: 1.45 } }[this.difficulty];
+        const difficulty = { hp: this.getDifficultyMultipliers().hpMult, damage: 1 };
         const bossType = { ...source,
-            hp: balancedBossHealth([720, 1450, 2400][phase] * (1 + this.worldId * 1.7) * difficulty.hp, participants, difficulty.hp),
-            dmg: [14, 18, 22][phase] * (1 + this.worldId * 0.3) * difficulty.damage,
-            xp: [180, 260, 380][(this.bossIndex - 1) % 3] * (1 + this.worldId),
-            spd: source.id === 'archon' ? 1.3 : 1.1
+            hp: balancedBossHealth(source.hp * getWorld(this.worldId).hpScale * difficulty.hp, participants, difficulty.hp),
+            dmg: source.dmg * getWorld(this.worldId).damageScale,
+            xp: Math.round(source.xp * getWorld(this.worldId).xpScale),
+            spd: source.spd
         };
         const boss = new ServerBoss(position.x, position.y, bossType);
         boss.spawnTimer = 2.5;
@@ -139,6 +138,7 @@ export class SpawnSystem {
     update(dt, monsters, gameTime, bullets, targets, bosses) {
         this.gameTime = gameTime;
         this.lastTargets = targets;
+        for (const target of targets) if ((target.worldId ?? this.worldId) === this.worldId) recordZoneEntry(target, this.worldId);
         const humans = targets.filter(target => target.hp > 0 && !target.isBot);
         this.maxMonsters = Math.min(this.roomBudget, 64 * Math.max(1, humans.length));
         const living = monsters.filter(monster => monster.hp > 0);
@@ -176,7 +176,10 @@ export class SpawnSystem {
             monster.update(dt, targets, bullets);
         }
         this.separateMonsters(monsters);
-        for (const monster of monsters) if (monster.hp > 0) resolveWorldMovement(monster, this.worldId, monster.sz * 0.5);
+        for (const monster of monsters) if (monster.hp > 0) {
+            resolveWorldMovement(monster, this.worldId, monster.sz * 0.5);
+            constrainDormantEnemy(monster);
+        }
         for (const boss of bosses || []) if (boss.hp > 0) {
             boss.update(dt, targets, bullets);
             resolveWorldMovement(boss, this.worldId, boss.sz * 0.5);

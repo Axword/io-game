@@ -353,6 +353,7 @@ export class ServerMonster {
             hp: Math.round(this.hp),
             maxHp: Math.round(this.maxHp),
             zoneIdx: this.zoneIdx,
+            zoneId: this.zoneId,
             isElite: this.isElite,
             isBoss: this.isBoss,
             type: this.type,

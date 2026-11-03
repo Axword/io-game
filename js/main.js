@@ -9,8 +9,9 @@ import { DeathScreen } from './ui/DeathScreen.js';
 import { RoomMenuScreen } from './ui/RoomMenuScreen.js';
 import { loadPermStats, savePermStats } from './utils/storage.js';
 import { WebSocketClient } from './network/WebSocketClient.js';
+import { MenuBackdrop } from './ui/MenuBackdrop.js';
 
-class ArenaIO {
+class VampsIO {
     constructor() {
         this.permStats = loadPermStats();
         this.isOnline = false;
@@ -28,6 +29,8 @@ class ArenaIO {
         this.inputManager = new InputManager();
         this.inputManager.setCamera(this.renderer.getCamera());
         this.inputManager.setCanvas(canvas);
+        this.menuBackdrop = new MenuBackdrop(document.getElementById('menu-backdrop'));
+        this.menuBackdropScreens = ['s-lobby', 's-menu', 's-room-config', 's-join-code', 's-waiting-room'].map(id => document.getElementById(id));
     }
     
     initUI() {
@@ -62,7 +65,7 @@ class ArenaIO {
     async initNetwork() {
         try {
             const scheme = location.protocol === 'https:' ? 'wss:' : 'ws:';
-            await this.wsClient.connect(window.ARENA_SERVER_URL || `${scheme}//${location.host}`);
+            await this.wsClient.connect(window.VAMPS_SERVER_URL || window.ARENA_SERVER_URL || `${scheme}//${location.host}`);
             this.isOnline = true;
 
             console.log('[Network] Connected - multiplayer available');
@@ -125,7 +128,7 @@ class ArenaIO {
             create: false,
             online: true
         };
-        console.log('[ArenaIO] Join with code:', {
+        console.log('[VampsIO] Join with code:', {
             playerName,
             code,
             currentConfig: this.currentConfig
@@ -189,7 +192,7 @@ class ArenaIO {
             mode = 'online';
         }
 
-        console.log('[ArenaIO] Class selected:', {
+        console.log('[VampsIO] Class selected:', {
             classId,
             mode,
             wantsOnline,
@@ -209,7 +212,7 @@ class ArenaIO {
 
             this.menuScreen.hide();
         } catch (e) {
-            console.warn('[ArenaIO] Game start failed:', e);
+            console.warn('[VampsIO] Game start failed:', e);
 
             alert(e.message || 'Nie udało się dołączyć do pokoju.');
 
@@ -235,11 +238,15 @@ class ArenaIO {
             if (this.game.applyLoot(card)) this.upgradeScreen.hide();
             return;
         }
-        this.game.applyUpgrade(card);
+        if (this.game.applyUpgrade(card) === false) return;
+        if (this.game.onlineMode) {
+            this.upgradeScreen.hide();
+            return;
+        }
         if (this.game.pendingUpgrades <= 0) {
             this.upgradeScreen.hide();
         } else {
-            if (this.game.upgradeCards) this.upgradeScreen.show(this.game.upgradeCards);
+            if (this.game.upgradeCards) this.upgradeScreen.show(this.game.upgradeCards, { mode: 'upgrade' });
         }
     }
     onShowPermScreen() {
@@ -317,11 +324,13 @@ class ArenaIO {
             
             const dt = Math.min((timestamp - this.lastTime) / 1000, 0.05);
             this.lastTime = timestamp;
-            if (this._inputState !== this.game.state) {
+            this.menuBackdrop.update(dt, this.menuBackdropScreens.some(screen => screen.style.display !== 'none'));
+            const canControl = ['playing', 'upgrade'].includes(this.game.state);
+            const wasControllable = ['playing', 'upgrade'].includes(this._inputState);
+            if (this._inputState !== this.game.state && !(canControl && wasControllable)) {
                 this.inputManager.releaseAll?.();
-                this._inputState = this.game.state;
             }
-            const canControl = this.game.state === 'playing';
+            this._inputState = this.game.state;
             if (this.inputManager.consumeAction?.('menu') && (canControl || this.roomMenuScreen.isVisible)) this.roomMenuScreen.toggle(this.game.room);
             // Online E travels through the input packet; the server handles its edge once.
             if (this.inputManager.consumeAction?.('portal') && canControl && !this.roomMenuScreen.isVisible && !this.game.onlineMode) this.game.travelWorld();
@@ -338,13 +347,14 @@ class ArenaIO {
                 if (!portalButton.onclick) portalButton.onclick = () => this.game.travelWorld();
             }
             
-            if (this.game.state === 'playing' || (this.game.onlineMode && this.game.state === 'upgrade')) {
+            if (['playing', 'upgrade', 'loot-opening', 'loot'].includes(this.game.state)) {
                 const upgradeCards = this.game.update(dt);
                 if (upgradeCards && (this.game.state === 'upgrade' || this.game.state === 'loot')) {
                     document.querySelector('#s-upgrade .s-title').textContent = this.game.state === 'loot' ? 'SKRZYNKA' : 'POZIOM WYŻEJ';
-                    this.upgradeScreen.show(upgradeCards);
+                    this.upgradeScreen.show(upgradeCards, { mode: this.game.state === 'loot' ? 'loot' : 'upgrade' });
                 }
             }
+            if (this.game.state === 'loot-opening') this.upgradeScreen.hide();
             if (this.game.state === 'victory') {
                 this.upgradeScreen.hide();
                 this.deathScreen.show(this.game.player.level, this.game.player.killedMonsters, this.game.player.totalDmg, false);
@@ -367,8 +377,9 @@ class ArenaIO {
                 this.game.state = 'death_screen';
             }
             
+            this.game.updatePresentation(dt);
             this.inputManager.resetClick();
-            this.renderer.render();
+            if (!this.menuBackdrop.visible) this.renderer.render();
         };
         
         requestAnimationFrame((ts) => {
@@ -378,4 +389,4 @@ class ArenaIO {
     }
 }
 
-new ArenaIO();
+new VampsIO();

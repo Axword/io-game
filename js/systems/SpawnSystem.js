@@ -6,9 +6,10 @@ import { BOSS_TYPES, BOSS_SPAWN_INTERVAL, DIFFICULTY_CONFIG, VIEW, WORLD } from 
 import { SOLO_ENCOUNTERS, SOLO_DIFFICULTIES } from '../config/encounters.js';
 import { getWorld } from '../../shared/config/worlds.js';
 import { isWorldSpawnClear, resolveWorldMovement } from '../../shared/systems/worldRules.js';
-import { updateWorldEnemy } from '../../shared/systems/enemyBehavior.js';
+import { updateWorldEnemy, constrainDormantEnemy } from '../../shared/systems/enemyBehavior.js';
 import { Bullet } from '../entities/Bullet.js';
 import { balancedBossHealth } from '../../shared/systems/encounterBalance.js';
+import { recordZoneEntry } from '../../shared/systems/zoneAggro.js';
 
 const limitPosition = value => Math.max(-WORLD / 2 + 90, Math.min(WORLD / 2 - 90, value));
 
@@ -87,7 +88,7 @@ export class SpawnSystem {
             const weight = roster.reduce((total, enemy) => total + enemy.weight, 0);
             let roll = Math.random() * weight;
             const archetype = roster.find(enemy => (roll -= enemy.weight) <= 0) || roster[0];
-            monster.configureArchetype(archetype, this.worldId, progress, difficulty);
+            monster.configureArchetype(archetype, this.worldId, progress, { ...difficulty, zoneAnchor: player });
         }
         monsters.push(monster);
         return monster;
@@ -105,8 +106,9 @@ export class SpawnSystem {
         if (this.solo && encounter) {
             const difficulty = this.getSoloDifficulty();
             data = { ...data, ...encounter,
-                hp: balancedBossHealth(encounter.hp * difficulty.hp * (1 + this.worldId * 1.7), targets, difficulty.hp), dmg: encounter.dmg * difficulty.damage * (1 + this.worldId * 0.3),
-                xp: encounter.xp * (1 + this.worldId), encounterId: encounter.id, col: getWorld(this.worldId).enemies[0].col };
+                hp: balancedBossHealth(encounter.hp * difficulty.hp * getWorld(this.worldId).hpScale, targets, difficulty.hp),
+                dmg: encounter.dmg * getWorld(this.worldId).damageScale,
+                xp: Math.round(encounter.xp * getWorld(this.worldId).xpScale), encounterId: encounter.id, col: getWorld(this.worldId).enemies[0].col };
         }
         this.createBossWarning(x, y, data, bosses);
     }
@@ -228,6 +230,7 @@ export class SpawnSystem {
     update(dt, monsters, gameTime, bullets, scene, targets, bosses) {
         this.gameTime = gameTime;
         this.lastTargets = targets;
+        if (this.solo) for (const target of targets) if ((target.worldId ?? this.worldId) === this.worldId) recordZoneEntry(target, this.worldId);
         this.monsterSpawnTimer -= dt;
         if (this.monsterSpawnTimer <= 0) {
             const progress = Math.min(1, gameTime / 480);
@@ -259,7 +262,10 @@ export class SpawnSystem {
             else monster.update(dt, targets, 0, bullets, scene);
         }
         this.separateMonsters(monsters);
-        if (this.solo) for (const monster of monsters) resolveWorldMovement(monster, this.worldId, monster.sz * 0.5);
+        if (this.solo) for (const monster of monsters) {
+            resolveWorldMovement(monster, this.worldId, monster.sz * 0.5);
+            constrainDormantEnemy(monster);
+        }
         for (const boss of bosses || []) {
             boss.update(dt, targets, bullets, scene);
             if (this.solo) resolveWorldMovement(boss, this.worldId, boss.sz * 0.55);

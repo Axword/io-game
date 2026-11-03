@@ -7,7 +7,7 @@ import { ServerPlayer } from '../server/entities/player.js';
 import { ServerMonster } from '../server/entities/monster.js';
 import { ZONES } from '../shared/config/constants.js';
 import { WORLDS } from '../shared/config/worlds.js';
-import { xpNeededForLevel } from '../shared/systems/worldRules.js';
+import { xpNeededForLevel, isWorldSpawnClear } from '../shared/systems/worldRules.js';
 import { GameCache } from '../server/gameCache.js';
 
 function fixture() {
@@ -55,8 +55,8 @@ test('travel preserves the build and health and clears old projectiles and state
     assert.equal(first.weapons, weapons);
     assert.equal(first.items, items);
     assert.equal(room.bullets.length, 0);
-    assert.equal(first.x, 0);
-    assert.equal(first.y, -180);
+    assert.ok(isWorldSpawnClear(first.x, first.y, 1, 55));
+    assert.ok(Math.max(Math.abs(first.x), Math.abs(first.y)) >= WORLDS[1].bounds - 250);
     assert.ok(first.invTimer > 0);
     assert.ok(messages.some(message => message.type === 'worldChanged' && message.data.worldId === 1));
     assert.equal(first.ws._snapshotEntitiesRoom, 'WORLDS/world/1');
@@ -150,14 +150,17 @@ test('each occupied world has an independent clock and inactive worlds remain as
     assert.equal(ember.gameTime, 0);
 });
 
-test('XP progression passes the old zone cap and records authoritative unlock history', () => {
+test('XP progression records authoritative unlock history and the original outer-zone cap', () => {
     const player = new ServerPlayer('progress', 'Progress', 'archer');
     let xpTo30 = 0;
     for (let level = 1; level < 30; level++) xpTo30 += xpNeededForLevel(level);
-    assert.equal(player.addXp(xpTo30, 4), 29);
+    assert.equal(player.addXp(xpTo30, 0), 29);
     assert.equal(player.level, 30);
     assert.equal(player.maxLevelReached, 30);
     assert.equal(player.xpNeeded, xpNeededForLevel(30));
+    const before = { xp: player.xp, totalXp: player.totalXp, level: player.level };
+    assert.equal(player.addXp(100000, 4), 0, 'outer-zone farming cannot bypass the original level-10 cap');
+    assert.deepEqual({ xp: player.xp, totalXp: player.totalXp, level: player.level }, before);
     const { room, first } = fixture();
     first.level = 30; first.maxLevelReached = 30;
     first.hp = 0;

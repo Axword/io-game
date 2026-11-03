@@ -13,8 +13,9 @@ import { UpgradeSystem } from './systems/UpgradeSystem.js';
 import { send, broadcastToRoom } from './utils/network.js';
 import { rngInt } from '../shared/utils/math.js';
 import { rollItemCards, applyItem, evolveWeapons } from '../shared/systems/items.js';
+import { resetZoneAggro } from '../shared/systems/zoneAggro.js';
 import { WORLDS, getWorld } from '../shared/config/worlds.js';
-import { resolveWorldMovement } from '../shared/systems/worldRules.js';
+import { resolveWorldMovement, getWorldEdgeSpawn, getWorldZone } from '../shared/systems/worldRules.js';
 import { shouldRetireProjectile } from '../shared/systems/projectileBounds.js';
 
 const BOT_NAMES = [
@@ -117,7 +118,8 @@ export class GameRoom {
         if (!destination) return false;
         origin.bullets = origin.bullets.filter(bullet => bullet.ownerId !== player.id);
         player.worldId = target;
-        player.x = 0; player.y = -180;
+        const arrival = getWorldEdgeSpawn(target, Math.random, root.players.values());
+        player.x = arrival.x; player.y = arrival.y;
         player.damageAccumulator = 0;
         player.invTimer = Math.max(1.5, player.invTimer || 0);
         player.portalReadyAt = root.elapsedTime + 2;
@@ -134,7 +136,7 @@ export class GameRoom {
     }
     addPlayer(ws, name, cls) {
         if (this.getHumanCount() >= this.maxParticipants) return null;
-        const point = { x: (this.players.size % 4 - 1.5) * 42, y: -180 - Math.floor(this.players.size / 4) * 42 };
+        const point = getWorldEdgeSpawn(0, Math.random, this.players.values());
 
         const player = new ServerPlayer(
             ws.id,
@@ -153,6 +155,7 @@ export class GameRoom {
         player.worldId = 0;
         player.maxLevelReached = 1;
         player.portalReadyAt = 0;
+        player.invTimer = 2;
 
         this.players.set(player.id, player);
 
@@ -259,24 +262,24 @@ export class GameRoom {
         this.inputQueue.set(playerId, input);
     }
 
-    applyUpgradeChoice(playerId, upgradeKey) {
+    applyUpgradeChoice(playerId, upgradeKey, offerId) {
         const player = this.players.get(playerId);
-        if (!player || player.pendingUpgrades <= 0) return;
+        if (!player || player.hp <= 0 || player.pendingUpgrades <= 0) return false;
+        if (offerId !== undefined && offerId !== player.upgradeOfferId) return false;
 
         const card = player.upgradeCards?.find(c => c.upgradeKey === upgradeKey);
-        if (!card) return;
+        if (!card) return false;
 
-        this.upgradeSystem.applyUpgrade(card, player, this.weaponSystem);
-        player.equipmentRevision = (player.equipmentRevision || 0) + 1;
+        if (this.upgradeSystem.applyUpgrade(card, player, this.weaponSystem) === false) return false;
         player.pendingUpgrades--;
 
         if (player.pendingUpgrades > 0) {
-            player.upgradeCards = this.upgradeSystem.generateUpgradeCards(player);
-            this.sendTo(player.id, { type: 'upgradeOptions', playerId, data: { cards: player.upgradeCards } });
+            this.offerUpgradeCards(player);
         } else {
             player.upgradeCards = null;
-            this.sendTo(player.id, { type: 'upgradeDone', playerId });
+            this.sendTo(player.id, { type: 'upgradeDone', playerId, data: { pendingUpgrades: 0, offerId: player.upgradeOfferId } });
         }
+        return true;
     }
 
     update(dt) {
@@ -431,7 +434,12 @@ export class GameRoom {
                 applyItem(player, card);
                 const evolutions = chest.rare ? evolveWeapons(player) : [];
                 player.equipmentRevision = (player.equipmentRevision || 0) + 1;
-                this.sendTo(player.id, { type: 'itemCollected', data: { item: card.name, stacks: card.stacks || 1, evolutions } });
+                this.sendTo(player.id, { type: 'itemCollected', data: { item: card.name, stacks: card.stacks || 1, evolutions,
+                    type: card.type, itemId: card.itemId, description: card.desc,
+                    itemRarity: card.itemRarity,
+                    totalItemRarities: player.itemRarities?.[card.itemId]?.slice(),
+                    totalStacks: player.items?.[card.itemId] || 0,
+                    chest: { id: chest.id, x: chest.x, y: chest.y, rare: chest.rare } } });
                 this.chests.splice(i, 1);
                 break;
             }
@@ -595,6 +603,7 @@ export class GameRoom {
         // Dead players -> death screen
         for (const player of this.worldPlayers()) {
             if (player.hp <= 0 && !player.deathNotified) {
+                resetZoneAggro(player);
                 player.hp = 0;
                 player.isDead = true;
                 player.deathNotified = true;
@@ -615,17 +624,28 @@ export class GameRoom {
     }
 
     handleLevelUp(player, levelUps) {
+        if (!Number.isSafeInteger(levelUps) || levelUps <= 0 || player.hp <= 0) return;
         player.pendingUpgrades += levelUps;
-        player.upgradeCards = this.upgradeSystem.generateUpgradeCards(player);
         this.sendTo(player.id, {
             type: 'levelUp',
             playerId: player.id,
             data: { level: player.level, pendingUpgrades: player.pendingUpgrades }
         });
+        // Extra XP queues another choice without replacing the offer being read.
+        this.offerUpgradeCards(player, !player.upgradeCards?.length);
+    }
+
+    offerUpgradeCards(player, generate = true) {
+        if (generate) {
+            player.upgradeCards = this.upgradeSystem.generateUpgradeCards(player);
+            // Room-wide IDs survive individual deaths and never repeat in a life.
+            this.rootRoom.nextUpgradeOfferId = (this.rootRoom.nextUpgradeOfferId || 0) + 1;
+            player.upgradeOfferId = this.rootRoom.nextUpgradeOfferId;
+        }
         this.sendTo(player.id, {
             type: 'upgradeOptions',
             playerId: player.id,
-            data: { cards: player.upgradeCards }
+            data: { cards: player.upgradeCards, pendingUpgrades: player.pendingUpgrades, offerId: player.upgradeOfferId }
         });
     }
 
@@ -636,11 +656,7 @@ export class GameRoom {
     }
 
     getZoneIdx(x, y) {
-        const dist = Math.hypot(x, y);
-        for (let i = 0; i < ZONES.length; i++) {
-            if (dist >= ZONES[i].minR && dist < ZONES[i].maxR) return i;
-        }
-        return ZONES.length - 1;
+        return getWorldZone(x, y, this.worldId).legacyZoneIdx;
     }
 
     getPermanentStats(playerId) {
@@ -797,16 +813,17 @@ export class GameRoom {
         return Array.from(this.players.values()).map(p => p.toState());
     }
 
-    getRandomSpawnPoint() {
-        return { x: (Math.random() - 0.5) * 100, y: -180 };
+    getRandomSpawnPoint(worldId = this.worldId) {
+        return getWorldEdgeSpawn(worldId, Math.random, this.players.values());
     }
 
     respawnPlayer(playerId) {
         const player = this.players.get(playerId);
         if (!player || player.hp > 0) return null;
-        const point = this.getRandomSpawnPoint();
+        const point = this.getRandomSpawnPoint(player.worldId || 0);
         const stats = this.getPermanentStats(playerId);
         const fresh = new ServerPlayer(player.id, player.name, player.cls, stats, point.x, point.y, false);
+        resetZoneAggro(player);
         fresh.ws = player.ws;
         fresh.items = {};
         fresh.equipmentRevision = (player.equipmentRevision || 0) + 1;
