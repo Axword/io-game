@@ -1,4 +1,8 @@
+import { iconMarkup } from './Icons.js';
+import { CLASSES } from '../config/classes.js';
+import { ITEMS } from '../../shared/config/items.js';
 import { getZoneIdx } from '../utils/math.js';
+import { getWorld } from '../../shared/config/worlds.js';
 
 export class HUD {
     constructor() {
@@ -33,8 +37,8 @@ export class HUD {
 
         this.bookSlots = [0, 1, 2, 3, 4].map(i => ({
             el: document.getElementById(`bs${i}`),
-            icon: document.querySelector(`#bs${i} .bi`),
-            name: document.querySelector(`#bs${i} .bn`)
+            icon: document.querySelector(`#bs${i} .wi`),
+            name: document.querySelector(`#bs${i} .wn`)
         }));
         // Rozmiar minimappy z HTML elementu
         this.sz = this.minimap.width || 110;
@@ -51,6 +55,9 @@ export class HUD {
 
     update(player, zones) {
         if (!player) return;
+        const now = performance.now();
+        if (now - (this._lastHudAt ?? -1000) < 90) return;
+        this._lastHudAt = now;
 
         // HP bar
         const hpPct = Math.max(0, player.hp / player.maxHp) * 100;
@@ -64,8 +71,10 @@ export class HUD {
         this.lvlTxt.textContent = `LVL ${player.level}`;
 
         // Strefa
-        const zi = getZoneIdx(player.x, player.y, zones);
-        this.zoneTxt.textContent = zones[zi].name;
+        const world = getWorld(window.gameInstance?.worldId || 0);
+        const label = document.getElementById('world-label');
+        if (label && label.textContent !== world.name) label.textContent = world.name;
+        this.zoneTxt.style.display = 'none';
 
         const centerDist = Math.hypot(player.x, player.y);
         if (centerDist < 800) {
@@ -85,66 +94,79 @@ export class HUD {
         this.updateWeaponSlots(player);
         this.updateBookSlots(player);
         this.updatePlayerStats(player);
+        this.updateItemSlots(player);
+        this.updateRunTimer();
+    }
+
+    updateRunTimer() {
+        const timer = document.getElementById('run-timer');
+        const game = window.gameInstance;
+        if (!timer || !game) return;
+        const format = seconds => {
+            const value = Math.max(0, Math.floor(seconds || 0));
+            return String(Math.floor(value / 60)).padStart(2, '0') + ':' + String(value % 60).padStart(2, '0');
+        };
+        const text = format(game.worldTime ?? game.gameTime) + (game.soloMode ? ' / ' + format(game.soloDuration || 480) : '');
+        if (timer.textContent !== text) timer.textContent = text;
+        const boss = game.bosses?.find(b => b.hp > 0);
+        timer.classList.toggle('boss-active', !!boss);
+        timer.title = boss?.bossData?.name || '';
     }
 
     updateWeaponSlots(player) {
-        for (let i = 0; i < 4; i++) {
+        for (let i = 0; i < this.weaponSlots.length; i++) {
             const slot = this.weaponSlots[i];
+            if (!slot.el || !slot.icon || !slot.name) continue;
             const weapon = player.weapons[i];
-
-            if (weapon && window.WEAPONS?.[weapon.type]) {
-                const wd = window.WEAPONS[weapon.type];
-                slot.icon.textContent = wd.icon;
-                slot.name.textContent = wd.name;
-                slot.el.classList.add('active');
-            } else {
-                slot.icon.textContent = '—';
-                slot.name.textContent = '';
-                slot.el.classList.remove('active');
-            }
+            const data = window.WEAPONS?.[weapon?.type];
+            const key = data ? weapon.type + ':' + (weapon.evolved || '') : '';
+            if (slot.key === key) continue;
+            slot.key = key;
+            slot.icon.innerHTML = data ? iconMarkup(weapon.type) : '—';
+            slot.name.textContent = data ? data.name : '';
+            slot.el.classList.toggle('active', !!data);
+            slot.el.classList.toggle('evolved', !!weapon?.evolved);
+            slot.el.title = weapon?.evolved || data?.name || '';
         }
     }
     updateBookSlots(player) {
-        if (!player.books) return;
-        
-        const BOOKS = window.BOOKS || {};
-        
-        for (let i = 0; i < 5; i++) {
-            const el = document.getElementById('bs' + i);
-            if (!el) continue;
-            
-            const book = player.books[i];
-            
-            if (book && BOOKS[book.type]) {
-                const wi = el.querySelector('.wi');
-                const wn = el.querySelector('.wn');
-                const bookData = BOOKS[book.type];
-                
-                if (wi) wi.textContent = bookData.icon;
-                if (wn) wn.textContent = bookData.name;
-                
-                // Pokaż poziom księgi
-                const level = book.level || 1;
-                if (level > 1) {
-                    el.setAttribute('data-level', level);
-                    el.classList.add('active');
-                } else {
-                    el.setAttribute('data-level', '1');
-                    el.classList.remove('active');
-                }
-                
-                // Tooltip z efektami księgi
-                el.title = this.getBookTooltip(book, bookData, player);
-                
+        const books = window.BOOKS || {};
+        for (let i = 0; i < this.bookSlots.length; i++) {
+            const slot = this.bookSlots[i];
+            if (!slot.el || !slot.icon || !slot.name) continue;
+            const book = player.books?.[i];
+            const data = books[book?.type];
+            const key = data ? book.type + ':' + (book.level || 1) : '';
+            if (slot.key === key) continue;
+            slot.key = key;
+            slot.icon.innerHTML = data ? iconMarkup(book.type) : '—';
+            slot.name.textContent = data ? data.name : '';
+            slot.el.classList.toggle('active', !!data);
+            if (data) {
+                slot.el.dataset.level = book.level || 1;
+                slot.el.title = this.getBookTooltip(book, data, player);
             } else {
-                const wi = el.querySelector('.wi');
-                const wn = el.querySelector('.wn');
-                if (wi) wi.textContent = '—';
-                if (wn) wn.textContent = '';
-                el.removeAttribute('data-level');
-                el.classList.remove('active');
-                el.title = '';
+                slot.el.removeAttribute('data-level');
+                slot.el.title = '';
             }
+        }
+    }
+    updateItemSlots(player) {
+        const container = document.getElementById('item-slots');
+        if (!container) return;
+        const entries = Object.entries(player.items || {}).filter(([id,count]) => ITEMS[id] && count > 0);
+        const key = JSON.stringify(entries);
+        if (key === this._itemSlotsKey) return;
+        this._itemSlotsKey = key;
+        container.replaceChildren();
+        for (const [id, count] of entries) {
+            const item = ITEMS[id];
+            const el = document.createElement('div');
+            el.className = 'item-slot';
+            el.title = item.name + ' ×' + count + '\n' + item.desc;
+            el.setAttribute('aria-label', el.title);
+            el.innerHTML = iconMarkup(item.icon) + '<span class="item-stack">' + count + '</span>';
+            container.appendChild(el);
         }
     }
 
@@ -153,28 +175,28 @@ export class HUD {
         const stats = book.stats || {};
         let tooltip = `${bookData.name} (Poziom ${level})\n${bookData.desc}\n\n`;
 
-        if (bookData.type === 'vitality') {
+        if (book.type === 'vitality') {
             const baseHp = CLASSES[player.cls].hp;
             const bonusHp = Math.round(baseHp * stats.maxHp * level);
             tooltip += `❤️ +${bonusHp} Max HP`;
-        } else if (bookData.type === 'speed') {
+        } else if (book.type === 'speed') {
             tooltip += `💨 +${Math.round(stats.moveSpeed * 100 * level)}% Prędkość`;
-        } else if (bookData.type === 'cooldown') {
+        } else if (book.type === 'cooldown') {
             tooltip += `⏰ -${Math.round(stats.cooldownReduction * level)}% Cooldown`;
-        } else if (bookData.type === 'magnet') {
+        } else if (book.type === 'magnet') {
             tooltip += `🧲 +${Math.round(stats.magnetRange * level)} Zasięg XP`;
-        } else if (bookData.type === 'critical') {
+        } else if (book.type === 'critical') {
             tooltip += `🎯 +${Math.round(stats.critChance * level)}% Szansa na Krytyk\n`;
             tooltip += `💥 +${Math.round(stats.critDamage * level)}% Obrażenia Kryt`;
-        } else if (bookData.type === 'damage') {
+        } else if (book.type === 'damage') {
             tooltip += `💥 +${Math.round(stats.damageBonus * level)}% Obrażenia`;
-        } else if (bookData.type === 'area') {
+        } else if (book.type === 'area') {
             tooltip += `💫 +${Math.round(stats.areaBonus * level)}% Obszar`;
-        } else if (bookData.type === 'luck') {
+        } else if (book.type === 'luck') {
             tooltip += `🍀 +${Math.round(stats.luck * level)} Szczęście`;
-        } else if (bookData.type === 'revival') {
+        } else if (book.type === 'revival') {
             tooltip += `👼 +${Math.round(stats.revives * level)} Dodatkowe życia`;
-        } else if (bookData.type === 'regeneration') {
+        } else if (book.type === 'regeneration') {
             tooltip += `💚 +${stats.regen * level} HP/s`;
         }
 
@@ -182,6 +204,9 @@ export class HUD {
     }
 
     updatePlayerStats(player) {
+        const now = performance.now();
+        if (now - (this._lastStatsAt ?? -1000) < 300) return;
+        this._lastStatsAt = now;
         this.statsContainer.innerHTML = '';
 
         // Podstawowe statystyki
@@ -233,7 +258,7 @@ export class HUD {
         statEl.style.fontFamily = "'Share Tech Mono', monospace";
 
         const iconEl = document.createElement('span');
-        iconEl.textContent = icon;
+        iconEl.innerHTML = iconMarkup(icon);
         iconEl.style.fontSize = '14px';
 
         const nameEl = document.createElement('span');
@@ -255,220 +280,37 @@ export class HUD {
     //  MINIMAPA
     // ============================================================
     updateMinimap(player, monsters, bots, safeRadius, bosses = []) {
-        const ctx  = this.minimapCtx;
-        const sz   = this.sz;
-        const half = sz / 2;
-
-        // Świat ma WORLD x WORLD jednostek, środek = (0,0)
-        const WORLD    = 12000;
-        const mapScale = sz / WORLD;
-
-        // Konwersja: współrzędne świata → piksele minimappy
-        // Świat: X rośnie w prawo, Y rośnie w górę
-        // Canvas: X rośnie w prawo, Y rośnie w dół  →  odwracamy Y
-        const toM = (wx, wy) => [
-            (wx / WORLD) * sz + half,
-            half - (wy / WORLD) * sz
-        ];
-
-        // ── tło ────────────────────────────────────────────────
-        ctx.clearRect(0, 0, sz, sz);
-        ctx.fillStyle = '#1a1a2e';
-        ctx.fillRect(0, 0, sz, sz);
-
-        // ── strefa niebezpieczeństwa (centrum) ─────────────────
-        const dangerR = 1500 * mapScale;
-        const dangerGrad = ctx.createRadialGradient(half, half, 0, half, half, dangerR);
-        dangerGrad.addColorStop(0,   'rgba(200, 0, 0, 0.55)');
-        dangerGrad.addColorStop(0.7, 'rgba(140, 0, 0, 0.25)');
-        dangerGrad.addColorStop(1,   'rgba(100, 0, 0, 0.05)');
-        ctx.fillStyle = dangerGrad;
-        ctx.beginPath();
-        ctx.arc(half, half, dangerR, 0, Math.PI * 2);
-        ctx.fill();
-
-        // ── obręcze stref ──────────────────────────────────────
-        const ZONE_RINGS = [
-            { r: 1500, col: 'rgba(255, 80,  80,  0.6)', lw: 1.2 },
-            { r: 3000, col: 'rgba(200, 100, 50,  0.35)', lw: 0.8 },
-            { r: 4500, col: 'rgba(150, 150, 50,  0.25)', lw: 0.8 },
-            { r: 6000, col: 'rgba(80,  150, 80,  0.20)', lw: 0.8 },
-        ];
-        for (const z of ZONE_RINGS) {
-            ctx.beginPath();
-            ctx.arc(half, half, z.r * mapScale, 0, Math.PI * 2);
-            ctx.strokeStyle = z.col;
-            ctx.lineWidth   = z.lw;
-            ctx.stroke();
+        if (!player) return;
+        const now = performance.now();
+        if (now - (this._lastMapAt ?? -1000) < 120) return;
+        this._lastMapAt = now;
+        const world = getWorld(window.gameInstance?.worldId || 0);
+        const ctx = this.minimapCtx, size = this.sz, half = size / 2;
+        const scale = (size - 8) / (world.bounds * 2);
+        const mapPoint = (x, y) => [half + x * scale, half - y * scale];
+        ctx.clearRect(0, 0, size, size);
+        ctx.fillStyle = '#28253a';
+        ctx.fillRect(0, 0, size, size);
+        ctx.strokeStyle = '#a6a1b8'; ctx.lineWidth = 1;
+        ctx.strokeRect(4, 4, size - 8, size - 8);
+        ctx.fillStyle = '#6f6a83';
+        for (const obstacle of world.obstacles || []) {
+            const [x, y] = mapPoint(obstacle.x, obstacle.y);
+            ctx.beginPath(); ctx.arc(x, y, Math.max(1, obstacle.r * scale), 0, Math.PI * 2); ctx.fill();
         }
-
-        // ── krzyżyk w centrum ──────────────────────────────────
-        ctx.strokeStyle = 'rgba(255, 80, 80, 0.5)';
-        ctx.lineWidth   = 0.8;
-        const cs = 3;
-        ctx.beginPath();
-        ctx.moveTo(half - cs, half); ctx.lineTo(half + cs, half);
-        ctx.moveTo(half, half - cs); ctx.lineTo(half, half + cs);
-        ctx.stroke();
-
-        // ── viewport gracza ────────────────────────────────────
-        if (player) {
-            const [px, py] = toM(player.x, player.y);
-            const vw = 900 * mapScale;
-            const vh = 900 * mapScale;
-
-            ctx.fillStyle   = 'rgba(180, 220, 255, 0.07)';
-            ctx.strokeStyle = 'rgba(120, 180, 255, 0.35)';
-            ctx.lineWidth   = 0.8;
-            ctx.fillRect  (px - vw / 2, py - vh / 2, vw, vh);
-            ctx.strokeRect(px - vw / 2, py - vh / 2, vw, vh);
-        }
-
-        // ── potwory ────────────────────────────────────────────
-        for (const m of monsters) {
-            const [mx, my] = toM(m.x, m.y);
-            if (mx < 0 || mx > sz || my < 0 || my > sz) continue;
-
-            if (m.isElite) {
-                // Elita – większa kropka z obwódką
-                ctx.beginPath();
-                ctx.arc(mx, my, 2.8, 0, Math.PI * 2);
-                ctx.fillStyle = 'rgba(255, 140, 0, .9)';
-                ctx.fill();
-                ctx.strokeStyle = '#ff6600';
-                ctx.lineWidth   = 0.6;
-                ctx.stroke();
-            } else {
-                ctx.beginPath();
-                ctx.arc(mx, my, 1.5, 0, Math.PI * 2);
-                ctx.fillStyle = 'rgba(200, 40, 40, .8)';
-                ctx.fill();
-            }
-        }
-
-        // ── bossy ──────────────────────────────────────────────
-        const now   = Date.now();
-        const pulse = 0.65 + Math.sin(now * 0.006) * 0.35;   // 0.30 – 1.00
-
-        for (const boss of bosses) {
-            const [bx, by] = toM(boss.x, boss.y);
-            if (bx < 0 || bx > sz || by < 0 || by > sz) continue;
-
-            // Pulsująca aura
-            ctx.beginPath();
-            ctx.arc(bx, by, 9 * pulse, 0, Math.PI * 2);
-            ctx.fillStyle = `rgba(255, 0, 0, ${0.15 * pulse})`;
-            ctx.fill();
-
-            // Zewnętrzny krąg (żółty)
-            ctx.beginPath();
-            ctx.arc(bx, by, 6, 0, Math.PI * 2);
-            ctx.strokeStyle = '#ffd600';
-            ctx.lineWidth   = 1.5;
-            ctx.stroke();
-
-            // Wypełnienie (czerwone)
-            ctx.beginPath();
-            ctx.arc(bx, by, 4.5, 0, Math.PI * 2);
-            ctx.fillStyle = '#cc0000';
-            ctx.fill();
-
-            // Symbol czaszki
-            ctx.save();
-            ctx.font          = 'bold 7px Arial';
-            ctx.textAlign     = 'center';
-            ctx.textBaseline  = 'middle';
-            ctx.fillStyle     = '#fff';
-            ctx.strokeStyle   = '#000';
-            ctx.lineWidth     = 1;
-            ctx.strokeText('☠', bx, by);
-            ctx.fillText  ('☠', bx, by);
-            ctx.restore();
-        }
-
-        // ── boty / inni gracze ─────────────────────────────────
-        // Boty są ukrytymi graczami – rysujemy ich jak prawdziwych graczy
-        for (const bot of bots) {
-            const [bx, by] = toM(bot.x, bot.y);
-            if (bx < 0 || bx > sz || by < 0 || by > sz) continue;
-
-            const cls    = bot.cls || 'default';
-            const colors = this.CLASS_COLORS[cls] || this.CLASS_COLORS.default;
-
-            // Tło (halo)
-            ctx.beginPath();
-            ctx.arc(bx, by, 4.5, 0, Math.PI * 2);
-            ctx.fillStyle = 'rgba(255,255,255,0.18)';
-            ctx.fill();
-
-            // Kółko gracza
-            ctx.beginPath();
-            ctx.arc(bx, by, 3, 0, Math.PI * 2);
-            ctx.fillStyle   = colors.fill;
-            ctx.strokeStyle = colors.stroke;
-            ctx.lineWidth   = 1;
-            ctx.fill();
-            ctx.stroke();
-
-            // Mały trójkąt kierunku (opcjonalny, jeśli bot ma rotation)
-            // (pomijamy – nie zawsze mamy kąt)
-        }
-
-        // ── gracz (my) ─────────────────────────────────────────
-        if (player) {
-            const [px, py] = toM(player.x, player.y);
-
-            // Pulsująca biała aura "jesteś tutaj"
-            const playerPulse = 0.5 + Math.sin(now * 0.005) * 0.5;
-            ctx.beginPath();
-            ctx.arc(px, py, 6 + playerPulse * 2, 0, Math.PI * 2);
-            ctx.fillStyle = `rgba(255, 255, 255, ${0.08 * playerPulse})`;
-            ctx.fill();
-
-            // Zewnętrzna biała obwódka
-            ctx.beginPath();
-            ctx.arc(px, py, 5, 0, Math.PI * 2);
-            ctx.strokeStyle = '#ffffff';
-            ctx.lineWidth   = 1.5;
-            ctx.stroke();
-
-            // Wypełnienie kolorem klasy
-            const cls    = player.cls || 'default';
-            const colors = this.CLASS_COLORS[cls] || this.CLASS_COLORS.default;
-            ctx.beginPath();
-            ctx.arc(px, py, 3.5, 0, Math.PI * 2);
-            ctx.fillStyle = colors.fill;
-            ctx.fill();
-
-            // Mała biała kropka w środku (marker "Ty")
-            ctx.beginPath();
-            ctx.arc(px, py, 1.2, 0, Math.PI * 2);
-            ctx.fillStyle = '#ffffff';
-            ctx.fill();
-        }
-
-        // ── ramka minimappy ────────────────────────────────────
-        // Zaokrąglona ramka z gradientem
-        ctx.strokeStyle = 'rgba(200, 200, 220, 0.55)';
-        ctx.lineWidth   = 1.5;
-        ctx.strokeRect(0.75, 0.75, sz - 1.5, sz - 1.5);
-
-        // Subtelny wewnętrzny cień (efekt winiety)
-        const vignette = ctx.createRadialGradient(half, half, half * 0.6, half, half, half * 1.1);
-        vignette.addColorStop(0,   'rgba(0,0,0,0)');
-        vignette.addColorStop(1,   'rgba(0,0,0,0.35)');
-        ctx.fillStyle = vignette;
-        ctx.fillRect(0, 0, sz, sz);
-
-        // Ramka jeszcze raz na wierzchu (po winiety)
-        ctx.strokeStyle = 'rgba(140, 160, 200, 0.7)';
-        ctx.lineWidth   = 1;
-        ctx.strokeRect(0.5, 0.5, sz - 1, sz - 1);
-
-        // ── legenda ────────────────────────────────────────────
-        this._drawLegend(ctx, sz, bosses.length > 0);
+        ctx.strokeStyle = '#d8b4ff'; ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.arc(half, half, 4, 0, Math.PI * 2); ctx.stroke();
+        const dot = (entity, radius, color) => {
+            const [x, y] = mapPoint(entity.x, entity.y);
+            if (x < 4 || x > size - 4 || y < 4 || y > size - 4) return;
+            ctx.fillStyle = color; ctx.beginPath(); ctx.arc(x, y, radius, 0, Math.PI * 2); ctx.fill();
+        };
+        for (const monster of monsters) if (monster.hp > 0) dot(monster, monster.isElite ? 2 : 1.2, monster.isElite ? '#ffe64a' : '#c987ee');
+        for (const boss of bosses) if (boss.hp > 0) dot(boss, 3.5, '#ff715a');
+        for (const other of bots) if (other.hp > 0) dot(other, 2.5, '#74e0ef');
+        dot(player, 3.5, '#ffffff');
+        dot(player, 1.8, '#2aaefa');
     }
-
     // Mała legenda w rogu minimappy
     _drawLegend(ctx, sz, hasBoss) {
         const items = [

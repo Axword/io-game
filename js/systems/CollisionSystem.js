@@ -1,9 +1,17 @@
 import { norm } from '../utils/math.js';
+import { SpatialHash, segmentDistanceSquared } from '../../shared/utils/SpatialHash.js';
+import { disposeObject } from '../utils/geometry.js';
 
 export class CollisionSystem {
+    constructor() { this.grid = new SpatialHash(); this.candidates = []; this.effects = []; }
     
     checkBulletCollisions(bullets, monsters, player, bots, bosses) {
+        this.grid.build(monsters);
         for (const b of bullets) {
+            if (b.life <= 0) {
+                if (b.isExplosive && !b.hasExploded) this.handleExplosion(b, monsters, bosses, player, bots);
+                continue;
+            }
             // ── Pociski wrogów trafiają graczy/boty ──────────
             if (b.owner === 'monster' || b.owner === 'boss') {
                 this.checkEnemyBullet(b, player, bots);
@@ -41,6 +49,9 @@ export class CollisionSystem {
 
     // ─── Helper: zbuduj listę celów dla pocisku ─────────────
     _getBulletTargets(b, monsters, bots) {
+        const dx = b.x - (b.prevX ?? b.x), dy = b.y - (b.prevY ?? b.y);
+        const radius = this.grid.maxRadius + b.sz * (b.wtype === 'sword' ? 60 : 12) + Math.hypot(dx, dy) / 2;
+        monsters = this.grid.query(b.x - dx / 2, b.y - dy / 2, radius, this.candidates);
         // Jeśli właściciel pocisku to bot lub gracz (nie potwór):
         // dolicz żywych botów jako potencjalne cele (PvP)
         if (!b.owner || b.owner === 'monster' || b.owner === 'boss') return monsters;
@@ -97,7 +108,7 @@ export class CollisionSystem {
                 : b.wtype === 'knife'
                 ? targetRadius * 0.75 + b.sz * 7
                 : targetRadius * 0.75 + b.sz * 3;
-            const dist = Math.hypot(b.x - m.x, b.y - m.y);
+            const dist = Math.sqrt(segmentDistanceSquared(m.x, m.y, b.prevX ?? b.x, b.prevY ?? b.y, b.x, b.y));
 
             if (dist < hitR) {
                 // Dla botów-AI: zastosuj mnożnik PvP (35%) i wywołaj ich takeDamage
@@ -140,12 +151,13 @@ export class CollisionSystem {
     // ─── Pociski vs bossy ────────────────────────────────────
 
     checkBulletVsBosses(b, bosses, player) {
+        if (b.life <= 0) return;
         for (const boss of bosses) {
             if (boss.hp <= 0) continue;
             if (b.hit.has(boss)) continue;
 
-            const hitR = boss.sz * 0.8 + (b.sz * 3);
-            const dist = Math.hypot(b.x - boss.x, b.y - boss.y);
+            const hitR = boss.sz * 0.8 + b.sz * (b.wtype === 'sword' ? 60 : 7);
+            const dist = Math.sqrt(segmentDistanceSquared(boss.x, boss.y, b.prevX ?? b.x, b.prevY ?? b.y, b.x, b.y));
 
             if (dist < hitR) {
                 const finalDmg = this.calculateDamage(b, boss);
@@ -386,38 +398,26 @@ export class CollisionSystem {
         fill.position.set(b.x, b.y, 2.4);
         b.scene.add(fill);
 
-        // Animacja zanikania
-        const scene = b.scene;
-        let fxLife = 0.35;
-        const startTime = Date.now();
-
-        const animate = () => {
-            const elapsed = (Date.now() - startTime) / 1000;
-            fxLife = 0.35 - elapsed;
-
-            if (fxLife <= 0) {
-                scene.remove(ring);
-                scene.remove(fill);
-                return;
-            }
-
-            const t = 1 - (fxLife / 0.35);
-
-            // Rozszerzanie
-            const scale = 1 + t * 0.6;
-            ring.scale.set(scale, scale, 1);
-            fill.scale.set(scale, scale, 1);
-
-            // Zanikanie
-            ringMat.opacity = 0.6 * (1 - t);
-            fillMat.opacity = 0.35 * (1 - t);
-
-            requestAnimationFrame(animate);
-        };
-
-        requestAnimationFrame(animate);
+        if (this.effects.length >= 40) disposeObject(this.effects.shift().mesh);
+        this.effects.push({ mesh: ring, life: 0.35, maxLife: 0.35, opacity: 0.6 });
+        this.effects.push({ mesh: fill, life: 0.35, maxLife: 0.35, opacity: 0.35 });
     }
 
+    updateEffects(dt) {
+        for (const fx of this.effects) {
+            fx.life -= dt;
+            const progress = Math.max(0, fx.life / fx.maxLife);
+            fx.mesh.material.opacity = fx.opacity * progress;
+            fx.mesh.scale.setScalar(1 + (1 - progress) * 0.6);
+            if (fx.life <= 0) disposeObject(fx.mesh);
+        }
+        this.effects = this.effects.filter(fx => fx.life > 0);
+    }
+
+    clearEffects() {
+        for (const fx of this.effects) disposeObject(fx.mesh);
+        this.effects.length = 0;
+    }
     // ─── Bounce (noże) ───────────────────────────────────────
 
     handleBounce(b, hitMonster, monsters) {
@@ -546,7 +546,7 @@ export class CollisionSystem {
         if (!player || !bosses) return;
 
         for (const boss of bosses) {
-            if (boss.hp <= 0) continue;
+            if (boss.hp <= 0 || boss.spawnTimer > 0 || boss.onlineSpawning) continue;
 
             const dist = Math.hypot(boss.x - player.x, boss.y - player.y);
             const collisionDist = boss.sz * 0.8 + 20;
@@ -564,7 +564,7 @@ export class CollisionSystem {
 
         for (const bot of bots) {
             for (const boss of bosses) {
-                if (boss.hp <= 0) continue;
+                if (boss.hp <= 0 || boss.spawnTimer > 0 || boss.onlineSpawning) continue;
 
                 const dist = Math.hypot(boss.x - bot.x, boss.y - bot.y);
                 const collisionDist = boss.sz * 0.8 + 20;

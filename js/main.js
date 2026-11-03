@@ -18,6 +18,7 @@ class ArenaIO {
 
         this.initSystems();
         this.initUI();
+        window.arenaApp = this;
         this.init();
     }
     
@@ -40,6 +41,10 @@ class ArenaIO {
         );
         this.upgradeScreen = new UpgradeScreen((card) => this.onUpgradeSelect(card));
         this.roomMenuScreen = new RoomMenuScreen(() => this.onLeaveRoom());
+        this.roomMenuScreen.onVisibilityChange = visible => {
+            if (this.game) this.game.paused = visible && !this.game.onlineMode;
+            this.inputManager.releaseAll?.();
+        };
         this.deathScreen = new DeathScreen(
             () => this.onShowPermScreen(),
             () => this.onPlayAgain()
@@ -53,15 +58,11 @@ class ArenaIO {
     
     init() {
         this.start();
-        this.initNetwork().then(() => {
-            console.log('[Network] init done', {
-                isOnline: this.isOnline
-            });
-        });
     }
     async initNetwork() {
         try {
-            await this.wsClient.connect(`wss://vamp-io.onrender.com`);
+            const scheme = location.protocol === 'https:' ? 'wss:' : 'ws:';
+            await this.wsClient.connect(window.ARENA_SERVER_URL || `${scheme}//${location.host}`);
             this.isOnline = true;
 
             console.log('[Network] Connected - multiplayer available');
@@ -107,7 +108,9 @@ class ArenaIO {
         this.currentConfig = {
             difficulty: 'medium',
             offline: true,
-            online: false
+            online: false,
+            solo: true,
+            bots: false
         };
         this.lobbyScreen.hide();
         this.menuScreen.show(this.permStats);
@@ -153,6 +156,13 @@ class ArenaIO {
         this.currentConfig = config;
     }
     async onClassSelect(classId) {
+        if (this.startingGame) return;
+        this.startingGame = true;
+        try { await this.startSelectedClass(classId); }
+        finally { this.startingGame = false; }
+    }
+
+    async startSelectedClass(classId) {
         const wantsOffline = this.forceOffline || this.currentConfig?.offline;
 
         const wantsOnline =
@@ -221,11 +231,15 @@ class ArenaIO {
         }
     }    
     onUpgradeSelect(card) {
+        if (this.game.state === 'loot') {
+            if (this.game.applyLoot(card)) this.upgradeScreen.hide();
+            return;
+        }
         this.game.applyUpgrade(card);
         if (this.game.pendingUpgrades <= 0) {
             this.upgradeScreen.hide();
         } else {
-            this.upgradeScreen.show(this.game.upgradeSystem.generateUpgradeCards(this.game.player));
+            if (this.game.upgradeCards) this.upgradeScreen.show(this.game.upgradeCards);
         }
     }
     onShowPermScreen() {
@@ -303,16 +317,45 @@ class ArenaIO {
             
             const dt = Math.min((timestamp - this.lastTime) / 1000, 0.05);
             this.lastTime = timestamp;
+            if (this._inputState !== this.game.state) {
+                this.inputManager.releaseAll?.();
+                this._inputState = this.game.state;
+            }
+            const canControl = this.game.state === 'playing';
+            if (this.inputManager.consumeAction?.('menu') && (canControl || this.roomMenuScreen.isVisible)) this.roomMenuScreen.toggle(this.game.room);
+            // Online E travels through the input packet; the server handles its edge once.
+            if (this.inputManager.consumeAction?.('portal') && canControl && !this.roomMenuScreen.isVisible && !this.game.onlineMode) this.game.travelWorld();
+            const controlsVisible = canControl && !this.roomMenuScreen.isVisible;
+            this.inputManager.touchControls?.setVisible(controlsVisible);
+            const portal = this.game.getPortalState();
+            this.inputManager.touchControls?.setPortalState(portal);
+            const portalButton = document.getElementById('world-portal');
+            if (portalButton) {
+                portalButton.hidden = !controlsVisible || !portal.near;
+                portalButton.disabled = portal.locked;
+                const label = portal.locked ? `${portal.targetName} · LV ${portal.requiredLevel}` : `E · ${portal.targetName}`;
+                if (portalButton.textContent !== label) portalButton.textContent = label;
+                if (!portalButton.onclick) portalButton.onclick = () => this.game.travelWorld();
+            }
             
-            if (this.game.state === 'playing' || this.game.state === 'upgrade') {
+            if (this.game.state === 'playing' || (this.game.onlineMode && this.game.state === 'upgrade')) {
                 const upgradeCards = this.game.update(dt);
-                
-                if (upgradeCards && this.game.state === 'upgrade') {
+                if (upgradeCards && (this.game.state === 'upgrade' || this.game.state === 'loot')) {
+                    document.querySelector('#s-upgrade .s-title').textContent = this.game.state === 'loot' ? 'SKRZYNKA' : 'POZIOM WYŻEJ';
                     this.upgradeScreen.show(upgradeCards);
                 }
             }
+            if (this.game.state === 'victory') {
+                this.upgradeScreen.hide();
+                this.deathScreen.show(this.game.player.level, this.game.player.killedMonsters, this.game.player.totalDmg, false);
+                document.querySelector('#s-death .s-title').textContent = 'ZWYCIĘSTWO';
+                this.deathScreen.deathStats.innerHTML += `<br>ŚWIATY: ${this.game.worldId + 1} / 3<br>BOSSOWIE: ${this.game.runStats.bossesDefeated}<br>SKRZYNKI: ${this.game.runStats.chestsOpened}`;
+                this.game.state = 'victory_screen';
+            }
             
             if (this.game.state === 'dead') {
+                this.upgradeScreen.hide();
+                document.querySelector('#s-death .s-title').textContent = 'ZGINĄŁEŚ';
                 const deathData = this.game.onPlayerDeath();
                 this.deathScreen.show(
                     deathData.level,

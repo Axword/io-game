@@ -1,5 +1,5 @@
 // entities/Entity.js
-import { mkShape } from '../utils/geometry.js';
+import { mkShape, disposeObject } from '../utils/geometry.js';
 
 export class Entity {
     constructor(x, y, scene) {
@@ -53,7 +53,7 @@ export class Entity {
     }
     
     removeMesh(mesh) {
-        if (mesh) this.scene.remove(mesh);
+        if (mesh) disposeObject(mesh);
     }
     
     destroy() {

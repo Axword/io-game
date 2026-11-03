@@ -15,6 +15,10 @@ export class LobbyScreen {
     }
     
     setupListeners() {
+        this.btnOffline?.addEventListener('click', () => {
+            if (!this.validateName()) return;
+            this.onOffline(this.playerName);
+        });
         const nameInput = document.getElementById('player-name');
         nameInput.value = this.playerName;
         nameInput.addEventListener('input', (e) => {
@@ -144,7 +148,7 @@ export class LobbyScreen {
         this.roomConfigScreen.style.display = 'flex';
     }
     
-    showJoinCodeScreen() {
+    showJoinCodeScreen(code = '') {
         if (this.screen) this.screen.style.display = 'none';
         if (this.roomConfigScreen) this.roomConfigScreen.style.display = 'none';
         if (this.waitingRoomScreen) this.waitingRoomScreen.style.display = 'none';

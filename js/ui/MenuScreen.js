@@ -1,3 +1,4 @@
+import { iconMarkup } from './Icons.js';
 import { CLASSES } from '../config/classes.js';
 import { WEAPONS } from '../config/weapons.js';
 
@@ -14,10 +15,12 @@ export class MenuScreen {
         this.grid.innerHTML = '';
         
         for (const [id, cd] of Object.entries(CLASSES)) {
-            const el = document.createElement('div');
+            const el = document.createElement('button');
+            el.type = 'button';
             el.className = 'cls-card';
+            el.dataset.classId = id;
             el.innerHTML = `
-                <div class="cls-emoji">${cd.emoji}</div>
+                <div class="cls-emoji">${iconMarkup(id)}</div>
                 <div class="cls-name">${cd.name}</div>
                 <div class="cls-desc">${cd.desc}</div>
                 <div class="cls-stats">HP:${cd.hp}  SPD:${cd.spd}  ${WEAPONS[cd.weapon].name}</div>

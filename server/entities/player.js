@@ -3,6 +3,7 @@ import { CLASSES } from '../../shared/config/classes.js';
 import { WEAPONS } from '../../shared/config/weapons.js';
 import { BOOKS } from '../../shared/config/books.js';
 import { WORLD, MOVEMENT_MULTIPLIER } from '../../shared/config/constants.js';
+import { xpNeededForLevel, resolveWorldMovement } from '../../shared/systems/worldRules.js';
 
 export class ServerPlayer {
     constructor(id, name, cls, permStats = {}, x = 0, y = 0, isBot = false) {
@@ -21,7 +22,9 @@ export class ServerPlayer {
 
         this.level = 1;
         this.xp = 0;
-        this.xpNeeded = 100;
+        this.xpNeeded = xpNeededForLevel(1);
+        this.worldId = 0;
+        this.maxLevelReached = 1;
         this.totalXp = 0;
 
         this.baseSpeed = cd.spd * speedBonus;
@@ -160,13 +163,18 @@ export class ServerPlayer {
             if (input.keys['KeyS'] || input.keys['ArrowDown']) dy -= 1;
             if (input.keys['KeyA'] || input.keys['ArrowLeft']) dx -= 1;
             if (input.keys['KeyD'] || input.keys['ArrowRight']) dx += 1;
+            if (Number.isFinite(input.moveX) && Number.isFinite(input.moveY)) {
+                dx = Math.max(-1, Math.min(1, input.moveX));
+                dy = Math.max(-1, Math.min(1, input.moveY));
+            }
         }
 
         if (dx || dy) {
             const len = Math.hypot(dx, dy);
             const finalSpeed = this.getFinalMoveSpeed();
-            this.x += (dx / len) * finalSpeed * MOVEMENT_MULTIPLIER * dt * 60;
-            this.y += (dy / len) * finalSpeed * MOVEMENT_MULTIPLIER * dt * 60;
+            const magnitude = Math.min(1, len);
+            this.x += (dx / len) * magnitude * finalSpeed * MOVEMENT_MULTIPLIER * dt * 60;
+            this.y += (dy / len) * magnitude * finalSpeed * MOVEMENT_MULTIPLIER * dt * 60;
         }
 
         this.clampToWorld();
@@ -183,9 +191,7 @@ export class ServerPlayer {
     }
 
     clampToWorld() {
-        const half = WORLD / 2;
-        this.x = Math.max(-half, Math.min(half, this.x));
-        this.y = Math.max(-half, Math.min(half, this.y));
+        resolveWorldMovement(this, this.worldId, 20);
     }
 
     takeDamage(amount, source = null) {
@@ -198,8 +204,6 @@ export class ServerPlayer {
     }
 
     addXp(amount, zoneIdx = -1) {
-        if (zoneIdx === 4 && this.level >= 10) return 0;
-
         this.xp += amount;
         this.totalXp = (this.totalXp || 0) + amount;
         let levelUps = 0;
@@ -207,7 +211,9 @@ export class ServerPlayer {
         while (this.xp >= this.xpNeeded) {
             this.xp -= this.xpNeeded;
             this.level++;
-            this.xpNeeded = Math.floor(100 * Math.pow(1.18, this.level - 1));
+            this.xpNeeded = xpNeededForLevel(this.level);
+            this.maxLevelReached = Math.max(this.maxLevelReached, this.level);
+            this.equipmentRevision = (this.equipmentRevision || 0) + 1;
 
             this.maxHp += 10;
             this.hp = Math.min(this.maxHp, this.hp + 20);
@@ -227,7 +233,7 @@ export class ServerPlayer {
     getPrimaryWeapon() {
         return this.weapons.find(w => w !== null) || null;
      }
-    toState() {
+    toState(includeLoadout = true) {
         return {
             id: this.id,
             name: this.name,
@@ -250,7 +256,11 @@ export class ServerPlayer {
             pendingUpgrades: this.pendingUpgrades || 0,
 
             class: this.cls,
-            weapons: this.weapons.map(w => w ? {
+            worldId: this.worldId,
+            maxLevelReached: Math.max(this.level, this.maxLevelReached || 1),
+            finalMoveSpeed: this.getFinalMoveSpeed(),
+            ...(includeLoadout ? { combatStats: Object.fromEntries(['armor','regen','magnetRange','cooldownReduction','areaBonus','critChance','critDamage','damageBonus','attackSpeedBonus','moveSpeedBonus','projectileSpeedBonus','projectileSizeBonus','rangeBonus','luck'].map(key => [key, this[key] || 0])) } : {}),
+            ...(includeLoadout ? { items: { ...(this.items || {}) }, weapons: this.weapons.map(w => w ? {
                 type: w.type,
                 timer: w.timer || 0,
                 upgrades: w.upgrades || {},
@@ -258,6 +268,7 @@ export class ServerPlayer {
                 appliedUpgrades: Array.from(w.appliedUpgrades || []),
                 upgradeApplyCount: w.upgradeApplyCount || {},
                 stats: w.stats || {}
+                ,evolved: w.evolved || null
             } : null),
 
             books: this.books.map(b => b ? {
@@ -265,7 +276,7 @@ export class ServerPlayer {
                 level: b.level || 1,
                 appliedUpgrades: Array.from(b.appliedUpgrades || []),
                 stats: b.stats || {}
-            } : null)
+            } : null) } : {})
         };
     }
 }

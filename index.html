@@ -2,12 +2,14 @@
 <html lang="pl">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>Arena.io</title>
     <link rel="stylesheet" href="css/styles2.css">
 </head>
 <body>
     <canvas id="gc"></canvas>
+    <div id="world-label" aria-live="polite"></div>
+    <button id="world-portal" type="button" hidden></button>
     
     <div id="ui">
         <div id="zone-txt">STREFA BEZPIECZNA</div>
@@ -39,21 +41,17 @@
         <div class="ws" id="bs1"><span class="wi">—</span><span class="wn"></span></div>
         <div class="ws" id="bs2"><span class="wi">—</span><span class="wn"></span></div>
         <div class="ws" id="bs3"><span class="wi">—</span><span class="wn"></span></div>
+        <div class="ws" id="bs4"><span class="wi">—</span><span class="wn"></span></div>
     </div>
 
         <div class="kf" id="kf"></div>
     </div>
     
-    <canvas id="minimap" width="110" height="110"></canvas>
+    <div id="item-slots"></div><div id="run-timer"></div><canvas id="minimap" width="110" height="110"></canvas>
 
     <div id="scoreboard">
-        <div id="scoreboard-title">🏆 RANKING</div>
+        <div id="scoreboard-title"><img class="game-icon small-icon" src="assets/icons/clover.svg" alt=""> RANKING</div>
         <div id="scoreboard-list"></div>
-    </div>
-
-    <div id="room-code-overlay" style="display:none;">
-        <div class="room-code-label">KOD POKOJU</div>
-        <div class="room-code-value" id="room-code-value">------</div>
     </div>
 
     <div class="screen" id="s-menu">
@@ -74,15 +72,11 @@
         </div>
 
         <div class="lobby-grid">
-            <button class="lobby-btn btn-quick" id="btn-quick-join">⚡ Szybka Gra</button>
-            <button type="button" class="lobby-btn btn-offline" id="btn-offline">🖥️ Gra Offline</button>
+            <button class="lobby-btn btn-quick" id="btn-quick-join"><img class="game-icon small-icon" src="assets/icons/lightning.svg" alt=""> Szybka Gra</button>
+            <button class="lobby-btn btn-join" id="btn-join-code"><img class="game-icon small-icon" src="assets/icons/prism.svg" alt=""> Dołącz przez Kod</button>
         </div>
-        <div class="lobby-grid">
 
-            <button class="lobby-btn btn-create" id="btn-create-room">🎮 Stwórz Pokój</button>
-            <button class="lobby-btn btn-join" id="btn-join-code">🔑 Dołącz przez Kod</button>
-
-        </div>
+        <button class="lobby-btn btn-create" id="btn-offline">Graj solo</button><button class="lobby-btn btn-create" id="btn-create-room"><img class="game-icon small-icon" src="assets/icons/chest.svg" alt=""> Stwórz Pokój</button>
 
         <div id="perm-disp-lobby" class="input-hint mt-24"></div>
     </div>
@@ -163,9 +157,10 @@
     </div>
 
     <div class="screen" id="s-upgrade" style="display:none">
-    <div style="font-size:17px;font-weight:700;color:#e67e00;margin-bottom:2px;">⬆ POZIOM WYŻEJ — wybierz ulepszenie</div>
-    <div class="up-cards" id="up-cards"></div>
-</div>
+        <div class="s-title title-warning">POZIOM WYŻEJ</div>
+        <div class="s-sub">wybierz ulepszenie</div>
+        <div class="up-cards" id="up-cards"></div>
+    </div>
 
     <div class="screen" id="s-death" style="display:none">
         <div class="s-title title-danger">ZGINĄŁEŚ</div>
@@ -182,7 +177,7 @@
         <div class="perm-cards" id="perm-cards"></div>
     </div>
 
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="node_modules/three/build/three.min.js"></script>
     <script type="module" src="js/main.js"></script>
 </body>
 </html>

@@ -55,7 +55,7 @@ export class GameCache {
         return rooms.find(room => {
             if (!room) return false;
 
-            const isFull = room.players.size >= maxPlayers;
+            const isFull = room.players.size >= Math.min(maxPlayers, room.maxParticipants || maxPlayers);
             const isEnded = room.state === 'ended';
             const isPrivate = room.privacy === 'private';
 

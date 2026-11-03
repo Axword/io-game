@@ -12,6 +12,10 @@ import { SpawnSystem } from './systems/SpawnSystem.js';
 import { UpgradeSystem } from './systems/UpgradeSystem.js';
 import { send, broadcastToRoom } from './utils/network.js';
 import { rngInt } from '../shared/utils/math.js';
+import { rollItemCards, applyItem, evolveWeapons } from '../shared/systems/items.js';
+import { WORLDS, getWorld } from '../shared/config/worlds.js';
+import { resolveWorldMovement } from '../shared/systems/worldRules.js';
+import { shouldRetireProjectile } from '../shared/systems/projectileBounds.js';
 
 const BOT_NAMES = [
     'xXShadowXx', 'ProGamer2024', 'NoobMaster', 'SkillIssue', 'TryHard_PL',
@@ -23,6 +27,12 @@ const BOT_NAMES = [
 export class GameRoom {
     constructor(id, options = {}) {
         this.id = id;
+        this.worldId = options.worldId ?? 0;
+        this.parentRoom = options.parentRoom || null;
+        this.rootRoom = this.parentRoom || this;
+        this.worlds = this.parentRoom?.worlds || new Map();
+        if (!this.parentRoom) this.worlds.set(0, this);
+        this.elapsedTime = 0;
         this.state = 'lobby';
         this.difficulty = options.difficulty || SERVER_CONFIG.DEFAULT_DIFFICULTY;
         this.botsEnabled = options.bots !== undefined ? !!options.bots : SERVER_CONFIG.DEFAULT_BOTS;
@@ -36,7 +46,8 @@ export class GameRoom {
         this.bosses = [];            // ServerBoss[]
         this.bullets = [];           // ServerBullet[]
         this.xpOrbs = [];            // ServerXpOrb[]
-        this.maxParticipants = 8;
+        this.maxParticipants = Number.isInteger(options.maxPlayers) ? Math.max(2, Math.min(12, SERVER_CONFIG.MAX_PLAYERS_PER_ROOM, options.maxPlayers)) : 8;
+        this.privacy = options.privacy === 'private' ? 'private' : 'public';
 
         this.botsEnabled = options.bots !== false;
 
@@ -46,6 +57,7 @@ export class GameRoom {
         this.weaponSystem = new WeaponSystem();
         this.collisionSystem = new CollisionSystem();
         this.spawnSystem = new SpawnSystem(ZONES);
+        this.spawnSystem.worldId = this.worldId;
         this.spawnSystem.setDifficulty(this.difficulty);
         this.upgradeSystem = new UpgradeSystem();
 
@@ -58,9 +70,71 @@ export class GameRoom {
         this.nextFxId = 1;
         this.stateSendTimer = 0;
         this.stateSendRate = 1 / 15; // 15 razy/s
+        this.chests = [];
+        this.nextChestId = 1;
+        this.nextChestTime = 25;
+        if (this.parentRoom) {
+            this.players = this.parentRoom.players;
+            this.inputQueue = this.parentRoom.inputQueue;
+        }
+    }
+    getWorldState(id = 0) {
+        const root = this.rootRoom;
+        if (!Number.isInteger(id) || !WORLDS.some(world => world.id === id)) return null;
+        if (!root.worlds.has(id)) root.worlds.set(id, new GameRoom(root.id, {
+            difficulty: root.difficulty, bots: root.botsEnabled, worldId: id, parentRoom: root,
+            maxPlayers: root.maxParticipants, privacy: root.privacy
+        }));
+        return root.worlds.get(id);
+    }
+
+    worldPlayers() {
+        return Array.from(this.players.values()).filter(player => (player.worldId || 0) === this.worldId);
+    }
+
+    unlockedWorlds(player) {
+        return WORLDS.filter(world => world.unlockLevel <= Math.max(player.level, player.maxLevelReached || 1)).map(world => world.id);
+    }
+
+    clearSocketState(ws) {
+        if (!ws) return;
+        ws._equipmentRevisions = new Map();
+        ws._snapshotEntitiesRoom = null;
+        ws._snapshotEntities = new Map();
+    }
+
+    travelWorld(playerId, targetWorldId) {
+        const root = this.rootRoom;
+        const player = root.players.get(playerId);
+        if (!player) return false;
+        const unlocked = root.unlockedWorlds(player);
+        const target = targetWorldId ?? ((player.worldId + 1) % WORLDS.length);
+        if (player.hp <= 0 || player.disconnectedAt || !Number.isInteger(target) || target === player.worldId ||
+            !unlocked.includes(target) || Math.hypot(player.x, player.y) > 100 ||
+            root.elapsedTime < (player.portalReadyAt || 0)) return false;
+        const origin = root.getWorldState(player.worldId);
+        const destination = root.getWorldState(target);
+        if (!destination) return false;
+        origin.bullets = origin.bullets.filter(bullet => bullet.ownerId !== player.id);
+        player.worldId = target;
+        player.x = 0; player.y = -180;
+        player.damageAccumulator = 0;
+        player.invTimer = Math.max(1.5, player.invTimer || 0);
+        player.portalReadyAt = root.elapsedTime + 2;
+        player.equipmentRevision = (player.equipmentRevision || 0) + 1;
+        root.inputQueue.delete(playerId);
+        root.clearSocketState(player.ws);
+        if (destination.state === 'lobby') destination.start();
+        root.sendTo(playerId, { type: 'worldChanged', data: {
+            worldId: target, worldTime: destination.gameTime, unlockedWorlds: unlocked,
+            x: player.x, y: player.y
+        } });
+        destination.broadcastState();
+        return true;
     }
     addPlayer(ws, name, cls) {
-        const point = SPAWN_POINTS[Math.floor(Math.random() * SPAWN_POINTS.length)];
+        if (this.getHumanCount() >= this.maxParticipants) return null;
+        const point = { x: (this.players.size % 4 - 1.5) * 42, y: -180 - Math.floor(this.players.size / 4) * 42 };
 
         const player = new ServerPlayer(
             ws.id,
@@ -74,6 +148,11 @@ export class GameRoom {
 
         player.ws = ws;
         player.isBot = false;
+        player.equipmentRevision = 0;
+        player.items = {};
+        player.worldId = 0;
+        player.maxLevelReached = 1;
+        player.portalReadyAt = 0;
 
         this.players.set(player.id, player);
 
@@ -86,6 +165,8 @@ export class GameRoom {
         const player = this.players.get(playerId);
         if (player) {
             this.players.delete(playerId);
+            this.inputQueue.delete(playerId);
+            for (const arena of this.rootRoom.worlds.values()) arena.bullets = arena.bullets.filter(bullet => bullet.ownerId !== playerId);
         }
         this.lastActivity = Date.now();
     }
@@ -105,6 +186,8 @@ export class GameRoom {
         const player = this.players.get(playerId);
         if (player) {
             player.disconnectedAt = Date.now();
+            this.inputQueue.delete(playerId);
+            for (const arena of this.rootRoom.worlds.values()) arena.bullets = arena.bullets.filter(bullet => bullet.ownerId !== playerId);
         }
     }
 
@@ -112,6 +195,9 @@ export class GameRoom {
         const player = this.players.get(playerId);
         if (player && player.disconnectedAt > 0) {
             if (Date.now() - player.disconnectedAt < SERVER_CONFIG.RECONNECT_TIMEOUT_MS) {
+                ws._equipmentRevisions = new Map();
+                ws._snapshotEntitiesRoom = null;
+                ws._snapshotEntities = new Map();
                 player.ws = ws;
                 player.disconnectedAt = 0;
                 return player;
@@ -142,7 +228,7 @@ export class GameRoom {
         this.gameTime = 0;
 
         // Initial monster spawn
-        const initialSpawnCount = 100;
+        const initialSpawnCount = 18;
         const allTargets = this.getAllLivingTargets();
 
         for (let i = 0; i < initialSpawnCount; i++) {
@@ -164,6 +250,12 @@ export class GameRoom {
     }
 
     queueInput(playerId, input) {
+        const player = this.players.get(playerId);
+        if (!player) return;
+        const pressed = !!input?.keys?.KeyE;
+        if (pressed && !player.portalHeld) this.travelWorld(playerId);
+        player.portalHeld = pressed;
+        player.lastInputTime = this.rootRoom.elapsedTime;
         this.inputQueue.set(playerId, input);
     }
 
@@ -175,6 +267,7 @@ export class GameRoom {
         if (!card) return;
 
         this.upgradeSystem.applyUpgrade(card, player, this.weaponSystem);
+        player.equipmentRevision = (player.equipmentRevision || 0) + 1;
         player.pendingUpgrades--;
 
         if (player.pendingUpgrades > 0) {
@@ -187,10 +280,35 @@ export class GameRoom {
     }
 
     update(dt) {
+        if (this.parentRoom) return this.updateArena(dt);
+        this.elapsedTime += dt;
+        const roomHumans = Math.max(1, Array.from(this.players.values()).filter(player => !player.disconnectedAt && player.hp > 0).length);
+        for (const arena of this.worlds.values()) {
+            const visitors = arena.worldPlayers().filter(player => !player.disconnectedAt);
+            const active = visitors.filter(player => player.hp > 0).length;
+            arena.spawnSystem.roomBudget = Math.max(0, Math.floor(320 * active / roomHumans));
+            if (visitors.length) {
+                arena.inactiveCleared = false;
+                arena.updateArena(dt);
+            } else if (!arena.inactiveCleared) {
+                // Sleeping worlds keep their encounter clock and small boss/chest
+                // state, while crowds and short-lived effects release references.
+                arena.monsters.length = 0;
+                arena.bullets.length = 0;
+                arena.xpOrbs.length = 0;
+                arena.spawnSystem.lastTargets = [];
+                arena.spawnSystem.monsterSpawnTimer = 0;
+                arena.inactiveCleared = true;
+            }
+        }
+        this.removeTimedOutPlayers();
+    }
+
+    updateArena(dt) {
         this.gameTime += dt;
         this.lastActivity = Date.now();
 
-        const allHumans = Array.from(this.players.values());
+        const allHumans = this.worldPlayers().filter(p => !p.disconnectedAt);
         const allBots = Array.from(this.bots.values());
         const allPlayers = [...allHumans, ...allBots];
         const allLivingTargets = allPlayers.filter(p => p.hp > 0);
@@ -198,10 +316,9 @@ export class GameRoom {
         // 1. Process inputs
         for (const player of allHumans) {
             if (player.hp <= 0) continue;
-            const input = this.inputQueue.get(player.id) || { keys: {}, mouseX: 0, mouseY: 0, mouseClicked: false };
+            const input = (this.rootRoom.elapsedTime - (player.lastInputTime ?? -10) < 0.3 && this.inputQueue.get(player.id)) || { keys: {}, mouseX: 0, mouseY: 0, mouseClicked: false };
             player.update(dt, input);
         }
-        this.inputQueue.clear();
 
         // 2. Bot AI & movement
         for (const bot of allBots) {
@@ -214,7 +331,9 @@ export class GameRoom {
 
         // 4. Update bullets (movement, life)
         for (const b of this.bullets) {
+            b.prevX = b.x; b.prevY = b.y;
             b.update(dt);
+            if (shouldRetireProjectile(b, this.worldId, b.ownerEntity || this.getEntityById(b.ownerId))) b.life = -1;
         }
 
         // 5. Update sword positions (attached to owners)
@@ -264,6 +383,7 @@ export class GameRoom {
 
         // 10. Cleanup dead entities, spawn orbs, level ups, respawn bots
         this.cleanupAndSpawn(dt);
+        this.updateChests();
         this.enforceBotLimit();
         // 10.5 Bot joining system
         this.updateBotJoining(dt);
@@ -272,7 +392,7 @@ export class GameRoom {
         this.stateSendTimer += dt;
 
         if (this.stateSendTimer >= this.stateSendRate) {
-            this.stateSendTimer = 0;
+            this.stateSendTimer %= this.stateSendRate;
             this.broadcastState();
         }
         // 12. Remove timed-out disconnected players
@@ -281,9 +401,41 @@ export class GameRoom {
 
     getAllLivingTargets() {
         const list = [];
-        for (const p of this.players.values()) if (p.hp > 0) list.push(p);
+        for (const p of this.worldPlayers()) if (p.hp > 0 && !p.disconnectedAt) list.push(p);
         for (const b of this.bots.values()) if (b.hp > 0) list.push(b);
         return list;
+    }
+
+    spawnChest(x, y, rare = false) {
+        if (this.chests.length >= 48) return;
+        const position = resolveWorldMovement({ x, y }, this.worldId, 25);
+        this.chests.push({ id: `c_${this.nextChestId++}`, x: position.x, y: position.y, rare, expiresAt: this.gameTime + 180 });
+    }
+
+    updateChests() {
+        this.chests = this.chests.filter(chest => chest.expiresAt > this.gameTime);
+        if (this.gameTime >= this.nextChestTime) {
+            this.nextChestTime += 45;
+            for (const player of this.worldPlayers()) {
+                if (player.hp <= 0 || player.disconnectedAt) continue;
+                const angle = Math.random() * Math.PI * 2;
+                this.spawnChest(Math.max(-5700, Math.min(5700, player.x + Math.cos(angle) * 200)), Math.max(-5700, Math.min(5700, player.y + Math.sin(angle) * 200)));
+            }
+        }
+        for (let i = this.chests.length - 1; i >= 0; i--) {
+            const chest = this.chests[i];
+            for (const player of this.worldPlayers()) {
+                if (player.hp <= 0 || player.disconnectedAt || Math.hypot(player.x - chest.x, player.y - chest.y) >= 42) continue;
+                const cards = rollItemCards(player, chest.rare);
+                const card = cards[Math.floor(Math.random() * cards.length)];
+                applyItem(player, card);
+                const evolutions = chest.rare ? evolveWeapons(player) : [];
+                player.equipmentRevision = (player.equipmentRevision || 0) + 1;
+                this.sendTo(player.id, { type: 'itemCollected', data: { item: card.name, stacks: card.stacks || 1, evolutions } });
+                this.chests.splice(i, 1);
+                break;
+            }
+        }
     }
 
     enforceBotLimit() {
@@ -316,6 +468,7 @@ export class GameRoom {
                     bullet.ownerEntity = owner;
                     bullet.x = owner.x + Math.cos(bullet._orbitAngle || 0) * (bullet.orbitRadius || 120);
                     bullet.y = owner.y + Math.sin(bullet._orbitAngle || 0) * (bullet.orbitRadius || 120);
+                    bullet.angle = (bullet._orbitAngle || 0) + Math.PI / 2;
                 }
             } else if (bullet.wtype === 'laser' && bullet.ownerId) {
                 const owner = ownerMap.get(bullet.ownerId);
@@ -343,18 +496,24 @@ export class GameRoom {
     updateXpOrbs(dt) {
         for (const orb of this.xpOrbs) {
             if (orb.life <= 0) continue;
-            for (const player of this.players.values()) {
-                if (player.hp <= 0) continue;
+            orb.life -= dt;
+            let nearest = null;
+            let nearestDistance = Infinity;
+            for (const player of this.worldPlayers()) {
+                if (player.hp <= 0 || player.disconnectedAt) continue;
+                const distance = (orb.x - player.x) ** 2 + (orb.y - player.y) ** 2;
+                if (distance < nearestDistance) { nearest = player; nearestDistance = distance; }
+            }
+            const player = nearest;
+            if (player) {
                 const collected = orb.update(dt, player);
                 if (collected) {
                     const zoneIdx = this.getZoneIdx(player.x, player.y);
                     const levelUps = player.addXp(orb.val, zoneIdx);
-                    player.totalXp = (player.totalXp || 0) + orb.val;
                     if (levelUps > 0) {
                         this.handleLevelUp(player, levelUps);
                     }
                     orb.life = -1;
-                    break;
                 }
             }
         }
@@ -386,6 +545,7 @@ export class GameRoom {
         for (const b of this.bosses) {
             if (b.hp <= 0) {
                 this.spawnSystem.spawnXpOrbs(b, this.xpOrbs);
+                this.spawnChest(b.x, b.y, true);
             }
         }
         this.bosses = this.bosses.filter(b => b.hp > 0);
@@ -433,7 +593,7 @@ export class GameRoom {
             }
         }
         // Dead players -> death screen
-        for (const player of this.players.values()) {
+        for (const player of this.worldPlayers()) {
             if (player.hp <= 0 && !player.deathNotified) {
                 player.hp = 0;
                 player.isDead = true;
@@ -484,6 +644,7 @@ export class GameRoom {
     }
 
     getPermanentStats(playerId) {
+        if (this.parentRoom) return this.rootRoom.getPermanentStats(playerId);
         if (!this.permanentStats) {
             this.permanentStats = new Map();
         }
@@ -509,8 +670,9 @@ export class GameRoom {
         return stats;
     }
     broadcastState() {
-        for (const player of this.players.values()) {
+        for (const player of this.worldPlayers()) {
             if (!player.ws || player.ws.readyState !== 1) continue;
+            if (player.ws.bufferedAmount > 128 * 1024) continue;
 
             const state = this.buildStateForPlayer(player);
 
@@ -531,17 +693,50 @@ export class GameRoom {
             return dx * dx + dy * dy <= r2;
         });
     }
+    nearbyStates(player, list, range, kind) {
+        const socket = player.ws || player;
+        const arenaKey = this.worldId ? `${this.id}/world/${this.worldId}` : this.id;
+        if (socket._snapshotEntitiesRoom !== arenaKey) {
+            socket._snapshotEntitiesRoom = arenaKey;
+            socket._snapshotEntities = new Map();
+        }
+        const previous = socket._snapshotEntities.get(kind) || new Set();
+        const visible = this.filterNear(player, list, range);
+        const next = new Set();
+        const states = visible.map(entity => {
+            next.add(entity.id);
+            if (!previous.has(entity.id)) return entity.toState();
+            const state = { id: entity.id, x: Math.round(entity.x * 10) / 10, y: Math.round(entity.y * 10) / 10 };
+            if (kind === 'monsters') state.hp = Math.round(entity.hp);
+            if (kind === 'monsters' && entity.archetypeId) state.telegraph = entity.telegraph ? { ...entity.telegraph } : null;
+            if (kind === 'bullets' && (entity.wtype === 'sword' || entity.wtype === 'axe')) state.angle = entity.angle;
+            return state;
+        });
+        socket._snapshotEntities.set(kind, next);
+        return states;
+    }
     buildStateForPlayer(player) {
-        const monsterRange = 1800;
-        const bulletRange = 1800;
-        const orbRange = 1400;
-        const bossRange = 3000;
+        if ((player.worldId || 0) !== this.worldId) return this.getWorldState(player.worldId).buildStateForPlayer(player);
+        const monsterRange = 1350;
+        const bulletRange = 1450;
+        const orbRange = 1000;
+        const bossRange = 1600;
+        const revisions = player.ws ? (player.ws._equipmentRevisions ??= new Map()) : new Map();
+        for (const id of revisions.keys()) {
+            if (!this.players.has(id) && !this.bots.has(id)) revisions.delete(id);
+        }
+        const serializePlayer = p => {
+            const revision = p.equipmentRevision || 0;
+            const includeLoadout = revisions.get(p.id) !== revision;
+            revisions.set(p.id, revision);
+            return p.toState(includeLoadout);
+        };
 
-        const players = Array.from(this.players.values())
-            .map(p => p.toState());
+        const players = this.worldPlayers()
+            .map(serializePlayer);
 
         const bots = Array.from(this.bots.values())
-            .map(b => b.toState());
+            .map(serializePlayer);
 
         return {
             type: 'gameState',
@@ -549,13 +744,17 @@ export class GameRoom {
             t: this.gameTime,
             data: {
                 gameTime: this.gameTime,
+                worldTime: this.gameTime,
+                worldId: this.worldId,
+                unlockedWorlds: this.unlockedWorlds(player),
+                chests: this.filterNear(player, this.chests, 1400).map(({ id, x, y, rare }) => ({ id, x, y, rare })),
 
                 players,
                 bots,
 
-                monsters: this.filterNear(player, this.monsters, monsterRange).map(m => m.toState()),
-                bullets: this.filterNear(player, this.bullets, bulletRange).map(b => b.toState()),
-                xpOrbs: this.filterNear(player, this.xpOrbs, orbRange).map(o => o.toState()),
+                monsters: this.nearbyStates(player, this.monsters, monsterRange, 'monsters'),
+                bullets: this.nearbyStates(player, this.bullets, bulletRange, 'bullets'),
+                xpOrbs: this.nearbyStates(player, this.xpOrbs, orbRange, 'xpOrbs'),
                 bosses: this.filterNear(player, this.bosses, bossRange).map(b => b.toState())
             }
         };
@@ -577,10 +776,11 @@ export class GameRoom {
             ...fx
         };
 
-        broadcastToRoom(this, {
-            type: 'fx',
-            data: event
-        });
+        for (const player of this.worldPlayers()) {
+            if (player.ws?.bufferedAmount > 128 * 1024) continue;
+            if (Number.isFinite(fx.x1) && (player.x - fx.x1) ** 2 + (player.y - fx.y1) ** 2 > 1600 ** 2) continue;
+            send(player.ws, { type: 'fx', data: event });
+        }
     }
 
     removeTimedOutPlayers() {
@@ -588,6 +788,7 @@ export class GameRoom {
         for (const [playerId, player] of this.players) {
             if (player.disconnectedAt > 0 && now - player.disconnectedAt > SERVER_CONFIG.RECONNECT_TIMEOUT_MS) {
                 this.players.delete(playerId);
+                this.inputQueue.delete(playerId);
             }
         }
     }
@@ -597,69 +798,44 @@ export class GameRoom {
     }
 
     getRandomSpawnPoint() {
-        const point = SPAWN_POINTS[Math.floor(Math.random() * SPAWN_POINTS.length)];
-
-        return {
-            x: point.x,
-            y: point.y
-        };
+        return { x: (Math.random() - 0.5) * 100, y: -180 };
     }
 
-   respawnPlayer(playerId) {
+    respawnPlayer(playerId) {
         const player = this.players.get(playerId);
-        if (!player) return null;
-
-        const spawnPoint = this.getRandomSpawnPoint();
-
-        player.x = spawnPoint.x;
-        player.y = spawnPoint.y;
-
-        player.level = 1;
-        player.xp = 0;
-        player.xpNeeded = 100;
-        player.totalXp = 0;
-
-        player.killedMonsters = 0;
-        player.totalDmg = 0;
-        player.pendingUpgrades = 0;
-
-        player.damageAccumulator = 0;
-        player.lastHitBy = null;
-
-        player.regenTimer = 0;
-        player.invTimer = 2;
-
-        player.input = {
-            keys: {},
-            mouseX: 0,
-            mouseY: 0,
-            mouseClicked: false
-        };
-
-        if (typeof this.applyPermanentStats === 'function') {
-            this.applyPermanentStats(player);
-        }
-
-        if (!player.maxHp || player.maxHp <= 0) {
-            player.maxHp = player.baseHp || 100;
-        }
-
-        player.hp = player.maxHp;
-
-        player.isDead = false;
-        player.dead = false;
-        player.deathNotified = false;
-        player.state = 'playing';
-
+        if (!player || player.hp > 0) return null;
+        const point = this.getRandomSpawnPoint();
+        const stats = this.getPermanentStats(playerId);
+        const fresh = new ServerPlayer(player.id, player.name, player.cls, stats, point.x, point.y, false);
+        fresh.ws = player.ws;
+        fresh.items = {};
+        fresh.equipmentRevision = (player.equipmentRevision || 0) + 1;
+        fresh.invTimer = 2;
+        fresh.upgradeCards = null;
+        fresh.lastInputTime = -10;
+        fresh.damageBonus += stats.dmg || 0;
+        fresh.magnetRange += stats.magnet || 0;
+        fresh.regen += stats.regen || 0;
+        fresh.lastHitBy = null;
+        fresh.worldId = player.worldId || 0;
+        fresh.maxLevelReached = Math.max(player.maxLevelReached || 1, player.level);
+        fresh.portalReadyAt = this.rootRoom.elapsedTime + 2;
+        fresh.portalHeld = false;
+        // Preserve references held by current combat systems, but reset the build.
+        Object.assign(player, fresh);
+        this.inputQueue.delete(playerId);
+        for (const arena of this.rootRoom.worlds.values()) arena.bullets = arena.bullets.filter(bullet => bullet.ownerId !== playerId);
+        this.clearSocketState(player.ws);
         return player;
     }
-
     getHumanCount() {
         return Array.from(this.players.values()).filter(p => !p.isBot).length;
     }
 
     getBotCount() {
-        return this.bots ? this.bots.size : 0;
+        let count = 0;
+        for (const arena of this.rootRoom.worlds.values()) count += arena.bots.size;
+        return count;
     }
 
     getParticipantCount() {
@@ -678,13 +854,12 @@ export class GameRoom {
     }
 
     removeOneBot() {
-        if (!this.bots || this.bots.size <= 0) return null;
-
-        // Usuń ostatniego bota z Mapy
-        const lastBotId = Array.from(this.bots.keys()).at(-1);
-        const bot = this.bots.get(lastBotId);
-
-        this.bots.delete(lastBotId);
+        const arena = Array.from(this.rootRoom.worlds.values()).reverse().find(world => world.bots.size);
+        if (!arena) return null;
+        const lastBotId = Array.from(arena.bots.keys()).at(-1);
+        const bot = arena.bots.get(lastBotId);
+        arena.bots.delete(lastBotId);
+        arena.bullets = arena.bullets.filter(bullet => bullet.ownerId !== lastBotId);
 
         console.log(`[Room ${this.id}] Bot removed to free slot: ${bot?.name || lastBotId}`);
 
@@ -714,7 +889,7 @@ export class GameRoom {
         if (!this.hasFreeParticipantSlot()) return null;
 
         const angle = Math.random() * Math.PI * 2;
-        const dist = 6500 + Math.random() * 1500;
+        const dist = 350 + Math.random() * 350;
 
         const bot = new ServerBot(
             Math.cos(angle) * dist,
@@ -725,6 +900,8 @@ export class GameRoom {
             }
         );
         bot.applyPendingStartUpgrades(this.upgradeSystem, this.weaponSystem);
+        bot.worldId = this.worldId;
+        resolveWorldMovement(bot, this.worldId, 20);
         this.bots.set(bot.id, bot);
         return bot;
     }

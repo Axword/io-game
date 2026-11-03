@@ -5,6 +5,7 @@ import { WEAPONS } from '../config/weapons.js';
 import { BOOKS } from '../config/books.js';
 import { MOVEMENT_MULTIPLIER } from '../config/constants.js';
 import { BotAI } from './BotAI.js';
+import { xpNeededForLevel, resolveWorldMovement } from '../../shared/systems/worldRules.js';
 
 const BOT_NAMES = [
     'Alpha', 'Beta', 'Gamma', 'Delta', 'Sigma',
@@ -30,7 +31,9 @@ export class Player extends Entity {
 
         this.level = 1;
         this.xp = 0;
-        this.xpNeeded = 100;
+        this.xpNeeded = xpNeededForLevel(1);
+        this.worldId = 0;
+        this.maxLevelReached = 1;
         this.totalXp = 0;
 
         this.baseSpeed = cd.spd * speedBonus;
@@ -86,7 +89,7 @@ export class Player extends Entity {
         this.mesh.position.set(startX, startY, z);
         scene.add(this.mesh);
 
-        this.createOutline(cd.shape, size + 3, 0x000000, 0.2, z - 0.1);
+        this.createOutline(cd.shape, size + 4, 0x17223f, 1, z - 0.1);
 
         if (isBot) {
             this.name = BOT_NAMES[Math.floor(Math.random() * BOT_NAMES.length)] + '_' + Math.floor(Math.random() * 999);
@@ -213,23 +216,32 @@ export class Player extends Entity {
     updatePlayer(dt, input) {
         let dx = 0;
         let dy = 0;
-
-        if (input.isKeyPressed('KeyW') || input.isKeyPressed('ArrowUp')) dy += 1;
-        if (input.isKeyPressed('KeyS') || input.isKeyPressed('ArrowDown')) dy -= 1;
-        if (input.isKeyPressed('KeyA') || input.isKeyPressed('ArrowLeft')) dx -= 1;
-        if (input.isKeyPressed('KeyD') || input.isKeyPressed('ArrowRight')) dx += 1;
+        if (input.getMovementVector) {
+            const movement = input.getMovementVector(); dx = movement.x; dy = movement.y;
+        } else {
+            if (input.isKeyPressed('KeyW') || input.isKeyPressed('ArrowUp')) dy += 1;
+            if (input.isKeyPressed('KeyS') || input.isKeyPressed('ArrowDown')) dy -= 1;
+            if (input.isKeyPressed('KeyA') || input.isKeyPressed('ArrowLeft')) dx -= 1;
+            if (input.isKeyPressed('KeyD') || input.isKeyPressed('ArrowRight')) dx += 1;
+        }
 
         if (dx || dy) {
             const len = Math.hypot(dx, dy);
             const finalSpeed = this.getFinalMoveSpeed();
 
-            this.x += (dx / len) * finalSpeed * MOVEMENT_MULTIPLIER * dt * 60;
-            this.y += (dy / len) * finalSpeed * MOVEMENT_MULTIPLIER * dt * 60;
+            const amount = Math.min(1, len);
+            this.x += (dx / len) * amount * finalSpeed * MOVEMENT_MULTIPLIER * dt * 60;
+            this.y += (dy / len) * amount * finalSpeed * MOVEMENT_MULTIPLIER * dt * 60;
         }
 
         this.clampToWorld();
         this.updatePosition(3, 2.9);
-        this.mesh.rotation.z += dt * 1.5;
+        // Small movement squash; keep the character silhouette legible.
+        const moving = dx || dy;
+        this.animTime = (this.animTime || 0) + dt;
+        const pulse = moving ? Math.sin(this.animTime * 12) * 0.035 : 0;
+        const baseScale = this.mesh.userData.baseScale || 1;
+        this.mesh.scale.set(baseScale * (1 + pulse), baseScale * (1 - pulse), 1);
     }
 
     updateBot(dt, monsters, xpOrbs, upgradeSystem, weaponSystem, allPlayers = []) {
@@ -273,9 +285,7 @@ export class Player extends Entity {
     }
 
     clampToWorld() {
-        const WORLD = 12000;
-        this.x = Math.max(-WORLD / 2, Math.min(WORLD / 2, this.x));
-        this.y = Math.max(-WORLD / 2, Math.min(WORLD / 2, this.y));
+        resolveWorldMovement(this, this.worldId, 22);
     }
 
     takeDamage(amount, source = null) {
@@ -291,8 +301,6 @@ export class Player extends Entity {
     }
 
     addXp(amount, zoneIdx = -1) {
-        if (zoneIdx === 4 && this.level >= 10) return 0;
-
         this.xp += amount;
         this.totalXp = (this.totalXp || 0) + amount;
         let levelUps = 0;
@@ -300,7 +308,8 @@ export class Player extends Entity {
         while (this.xp >= this.xpNeeded) {
             this.xp -= this.xpNeeded;
             this.level++;
-            this.xpNeeded = Math.floor(100 * Math.pow(1.18, this.level - 1));
+            this.xpNeeded = xpNeededForLevel(this.level);
+            this.maxLevelReached = Math.max(this.maxLevelReached || 1, this.level);
 
             this.maxHp += 10;
             this.hp = Math.min(this.maxHp, this.hp + 20);
@@ -356,5 +365,6 @@ export class Player extends Entity {
     destroy() {
         super.destroy();
         this.removeMesh(this.auraRing);
+        this.removeMesh(this.auraInner);
     }
 }

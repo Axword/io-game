@@ -1,52 +1,26 @@
+import { weaponStat, weaponCooldown } from '../../shared/utils/weaponStats.js';
 import { Bullet } from '../entities/Bullet.js';
 import { WEAPONS } from '../config/weapons.js';
 import { norm } from '../utils/math.js';
+import { disposeObject } from '../utils/geometry.js';
 
 export class WeaponSystem {
     constructor(scene) {
         this.scene = scene;
     }
 
-    getWeaponStat(w, stat, entity) {
-        const base = w.stats[stat] || 0;
-        const upgrade = w.upgrades?.[stat] || 0;
-
-        // Globalne bonusy gracza
-        let globalMult = 1;
-        if (stat === 'dmg' && entity?.damageBonus) {
-            globalMult *= (1 + entity.damageBonus / 100);
-        }
-        if (stat === 'bSz' && entity?.projectileSizeBonus) {
-            globalMult *= (1 + entity.projectileSizeBonus / 100);
-        }
-        if (stat === 'bSpd' && entity?.projectileSpeedBonus) {
-            globalMult *= (1 + entity.projectileSpeedBonus / 100);
-        }
-        if ((stat === 'range' || stat === 'orbit') && entity?.rangeBonus) {
-            globalMult *= (1 + entity.rangeBonus / 100);
-        }
-        if (stat === 'atkSpd' && entity?.attackSpeedBonus) {
-            globalMult *= (1 + entity.attackSpeedBonus / 100);
-        }
-
-        // Additive vs multiplicative
-        if (typeof upgrade === 'number' && upgrade > 0 && upgrade < 5) {
-            // Prawdopodobnie additive
-            return (base + upgrade) * globalMult;
-        }
-        return base * (upgrade || 1) * globalMult;
-    }
+    getWeaponStat(w, stat, entity) { return weaponStat(w, stat, entity); }
 
     fireWeapon(entity, slotIdx, inputManager, monsters, bullets, fxList, owner) {
+        if (bullets.length >= 450) return;
         const w = entity.weapons[slotIdx];
-        if (!w || w.timer > 0) return;
+        if (!w || w.timer > 1e-9) return;
 
         const wd = WEAPONS[w.type];
         if (!wd) return;
 
         // Cooldown
-        const atkSpd = this.getWeaponStat(w, 'atkSpd', entity);
-        w.timer = wd.cooldown / Math.max(0.1, atkSpd);
+        w.timer = (w.timer || 0) + weaponCooldown(w, entity, wd);
 
         switch (w.type) {
             case 'bow':       this.fireBow(entity, w, monsters, bullets, owner); break;
@@ -443,7 +417,8 @@ export class WeaponSystem {
         const range = this.getWeaponStat(auraWeapon, 'range', entity);
 
         // Usuń starą aurę
-        if (entity.auraRing) this.scene.remove(entity.auraRing);
+        if (entity.auraRing) disposeObject(entity.auraRing);
+        if (entity.auraInner) disposeObject(entity.auraInner);
 
         // Ring zewnętrzny
         const ringGeo = new THREE.RingGeometry(range - 4, range, 48);

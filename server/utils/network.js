@@ -12,7 +12,7 @@ export function broadcastToRoom(room, data, exceptWs = null) {
     if (!room) return;
     const payload = JSON.stringify(data);
     for (const player of room.players.values()) {
-        if (player.ws && player.ws !== exceptWs && player.ws.readyState === 1) {
+        if (player.ws && player.ws !== exceptWs && player.ws.readyState === 1 && player.ws.bufferedAmount < 128 * 1024) {
             try {
                 player.ws.send(payload);
             } catch (e) {

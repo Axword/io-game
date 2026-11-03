@@ -1,8 +1,8 @@
 import { v4 as uuidv4 } from 'uuid';
-import { rng } from '../../shared/utils/math.js';
-import { BOSS_TYPES } from '../../shared/config/constants.js';
-import { MONSTER_CONFIG } from '../../shared/config/monsters.js';
+import { WORLD } from '../../shared/config/constants.js';
 import { ServerBullet } from './bullet.js';
+import { getWorld } from '../../shared/config/worlds.js';
+import { resolveWorldMovement } from '../../shared/systems/worldRules.js';
 
 export class ServerBoss {
     constructor(x, y, bossType) {
@@ -20,25 +20,37 @@ export class ServerBoss {
         this.xp = bossType.xp;
         this.isBoss = true;
         this.hitTimer = 0;
-        this.shootTimer = rng(1, 2);
         this.currentTarget = null;
-        this.orbitAngle = Math.random() * Math.PI * 2;
-        this.orbitDir = Math.random() < 0.5 ? 1 : -1;
         this.lastHitBy = null;
         this._dmgMap = new Map();
-        this.shootRange = MONSTER_CONFIG.shooting.ranges.boss;
-        this.bulletSpeed = MONSTER_CONFIG.shooting.speeds.boss;
-        this.bulletLifetime = MONSTER_CONFIG.shooting.lifetimes.boss;
+        this.abilities = bossType.abilities || ['shockwave', 'charge'];
+        this.abilityIndex = 0;
+        this.abilityTimer = 2.4;
+        this.attackState = null;
+        this.spawnTimer = 0;
+        this.shieldTimer = 0;
+        this.worldId = 0;
+    }
+
+    clamp(value) {
+        const bounds = getWorld(this.worldId).bounds - this.sz;
+        return Math.max(-bounds, Math.min(bounds, value));
     }
 
     update(dt, targets, bullets) {
-        if (!this.currentTarget || this.currentTarget.hp <= 0) {
-            this.currentTarget = this.findNearestTarget(targets);
-        }
-        if (this.currentTarget) {
-            this.chaseAndAttack(dt, bullets);
-        }
+        if (this.hp <= 0) return;
+        if (this.spawnTimer > 0) { this.spawnTimer -= dt; return; }
+        if (this.shieldTimer > 0) this.shieldTimer -= dt;
         if (this.hitTimer > 0) this.hitTimer -= dt;
+        this.currentTarget = this.findNearestTarget(targets);
+        if (this.attackState) {
+            this.advanceAttack(dt, bullets);
+            return;
+        }
+        if (!this.currentTarget) return;
+        this.chaseAndAttack(dt);
+        this.abilityTimer -= dt;
+        if (this.abilityTimer <= 0) this.beginAttack(this.currentTarget);
     }
 
     findNearestTarget(targets) {
@@ -46,85 +58,117 @@ export class ServerBoss {
         let minDist = Infinity;
         for (const target of targets) {
             if (target.hp <= 0) continue;
-            const dist = Math.hypot(target.x - this.x, target.y - this.y);
-            if (dist < minDist) {
-                minDist = dist;
-                nearest = target;
-            }
+            const distance = Math.hypot(target.x - this.x, target.y - this.y);
+            if (distance < minDist) { minDist = distance; nearest = target; }
         }
         return nearest;
     }
 
-    chaseAndAttack(dt, bullets) {
+    chaseAndAttack(dt) {
         const dx = this.currentTarget.x - this.x;
         const dy = this.currentTarget.y - this.y;
         const distance = Math.hypot(dx, dy);
-        if (distance < 2) return;
-
-        if (distance < this.shootRange) {
-            this.shootTimer -= dt;
-            if (this.shootTimer <= 0) {
-                const cooldown = MONSTER_CONFIG.shooting.cooldowns.boss;
-                this.shootTimer = rng(cooldown[0], cooldown[1]);
-                this.shootAtTarget(this.currentTarget, bullets);
-            }
-        }
-
-        const attackRange = MONSTER_CONFIG.attack.bossRange;
-        this.orbitAngle += this.orbitDir * dt * 0.5;
-        const orbitRadius = attackRange * 0.9;
-        const targetX = this.currentTarget.x + Math.cos(this.orbitAngle) * orbitRadius;
-        const targetY = this.currentTarget.y + Math.sin(this.orbitAngle) * orbitRadius;
-        const tdx = targetX - this.x;
-        const tdy = targetY - this.y;
-        const tdist = Math.hypot(tdx, tdy);
-        if (tdist < 1) return;
-        const moveSpeed = distance < attackRange ? this.spd * MONSTER_CONFIG.attack.slowdownFactor : this.spd;
-        this.x += (tdx / tdist) * moveSpeed * dt * 55;
-        this.y += (tdy / tdist) * moveSpeed * dt * 55;
+        if (distance <= this.sz * 0.75 + 48) return;
+        const step = Math.min(distance, this.spd * 55 * dt);
+        this.x = this.clamp(this.x + dx / distance * step);
+        this.y = this.clamp(this.y + dy / distance * step);
     }
 
-    shootAtTarget(target, bullets) {
-        const dx = target.x - this.x;
-        const dy = target.y - this.y;
-        const len = Math.hypot(dx, dy) || 1;
-        const bullet = new ServerBullet(
-            this.x, this.y,
-            (dx / len) * this.bulletSpeed,
-            (dy / len) * this.bulletSpeed,
-            this.dmg * 0.5,
-            this.id,
-            'wand',
-            1.5, 0, 0, 0xff00ff
-        );
+    beginAttack(target) {
+        const ability = this.abilities[this.abilityIndex++ % this.abilities.length];
+        const angle = Math.atan2(target.y - this.y, target.x - this.x);
+        const attack = { ability, angle, remaining: ability === 'meteor' ? 1.2 : 1, distance: ability === 'charge' ? 380 : 760 };
+        if (ability === 'meteor') attack.positions = [
+            { x: target.x, y: target.y },
+            { x: target.x + Math.cos(angle + 1.8) * 125, y: target.y + Math.sin(angle + 1.8) * 125 },
+            { x: target.x + Math.cos(angle - 1.8) * 125, y: target.y + Math.sin(angle - 1.8) * 125 }
+        ];
+        if (ability === 'teleport') attack.destination = resolveWorldMovement({ x: this.clamp(target.x - Math.cos(angle) * 300), y: this.clamp(target.y - Math.sin(angle) * 300) }, this.worldId, this.sz * 0.5);
+        this.attackState = attack;
+    }
+
+    advanceAttack(dt, bullets) {
+        const attack = this.attackState;
+        attack.remaining -= dt;
+        if (attack.charging) {
+            const step = Math.min(attack.distance, dt * 640);
+            this.x = this.clamp(this.x + Math.cos(attack.angle) * step);
+            this.y = this.clamp(this.y + Math.sin(attack.angle) * step);
+            attack.distance -= step;
+            if (attack.distance <= 0 || attack.remaining <= 0) this.finishAttack();
+            return;
+        }
+        if (attack.remaining > 0) return;
+        switch (attack.ability) {
+            case 'charge': attack.charging = true; attack.remaining = 0.65; break;
+            case 'meteor':
+                for (const point of attack.positions) this.createBullet(point.x, point.y, 0, 0, this.dmg, 3.3, 0.24, bullets, true);
+                this.finishAttack();
+                break;
+            case 'laser':
+                for (let distance = 35; distance < attack.distance; distance += 32) {
+                    this.createBullet(this.x + Math.cos(attack.angle) * distance, this.y + Math.sin(attack.angle) * distance,
+                        0, 0, this.dmg * 0.75, 1.1, 0.18, bullets, true);
+                }
+                this.finishAttack();
+                break;
+            case 'teleport':
+                this.x = attack.destination.x;
+                this.y = attack.destination.y;
+                this.finishAttack();
+                break;
+            case 'shield': this.shieldTimer = 2.2; this.finishAttack(); break;
+            default:
+                for (let i = 0; i < 10; i++) {
+                    const direction = attack.angle + (i + 0.5) * Math.PI * 2 / 10;
+                    this.createBullet(this.x, this.y, Math.cos(direction) * 3.5, Math.sin(direction) * 3.5,
+                        this.dmg * 0.6, 1.1, 3.2, bullets);
+                }
+                this.finishAttack();
+        }
+    }
+
+    finishAttack() {
+        this.attackState = null;
+        this.abilityTimer = this.hp < this.maxHp * 0.5 ? 2.8 : 3.8;
+    }
+
+    createBullet(x, y, vx, vy, dmg, size, life, bullets, mine = false) {
+        const bullet = new ServerBullet(x, y, vx, vy, dmg, this.id, mine ? 'mine' : 'wand', size, 0, 0, 0xff8e45);
         bullet.ownerType = 'boss';
-        bullet.life = this.bulletLifetime;
+        bullet.worldId = this.worldId;
+        bullet.life = life;
+        bullet.isMine = mine;
         bullets.push(bullet);
     }
 
     takeDamage(amount, attacker = null) {
-        this.hp -= amount;
+        if (this.spawnTimer > 0 || !Number.isFinite(amount) || amount <= 0) return;
+        const damage = this.shieldTimer > 0 ? amount * 0.5 : amount;
+        this.hp -= damage;
         this.hitTimer = 0.1;
         if (attacker && attacker !== 'monster' && attacker !== 'boss') {
-            const prev = this._dmgMap.get(attacker) || 0;
-            this._dmgMap.set(attacker, prev + amount);
-            let topDmg = 0, topAttacker = attacker;
-            for (const [a, d] of this._dmgMap) {
-                if (d > topDmg) { topDmg = d; topAttacker = a; }
+            this._dmgMap.set(attacker, (this._dmgMap.get(attacker) || 0) + damage);
+            let topDmg = 0;
+            for (const [candidate, total] of this._dmgMap) {
+                if (total > topDmg) { topDmg = total; this.lastHitBy = candidate; }
             }
-            this.lastHitBy = topAttacker;
         }
     }
 
     toState() {
+        const attack = this.attackState;
         return {
-            id: this.id,
-            x: this.x,
-            y: this.y,
-            hp: Math.round(this.hp),
-            maxHp: Math.round(this.maxHp),
-            type: this.bossData.id,
-            sz: this.sz
+            id: this.id, x: this.x, y: this.y,
+            hp: Math.round(this.hp), maxHp: Math.round(this.maxHp),
+            type: this.bossData.id, sz: this.sz,
+            worldId: this.worldId,
+            spawnTimer: this.spawnTimer,
+            shieldActive: this.shieldTimer > 0,
+            telegraph: attack && !attack.charging ? { ability: attack.ability, angle: attack.angle,
+                remaining: attack.remaining, distance: attack.distance,
+                positions: attack.positions, destination: attack.destination,
+                sequence: this.abilityIndex } : null
         };
     }
 }

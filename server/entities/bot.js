@@ -2,6 +2,7 @@ import { ServerPlayer } from './player.js';
 import { CLASSES } from '../../shared/config/classes.js';
 import { rngInt } from '../../shared/utils/math.js';
 import { BotAI } from '../systems/BotAI.js';
+import { xpNeededForLevel } from '../../shared/systems/worldRules.js';
 
 const ALL_CLASSES = Object.keys(CLASSES);
 const BOT_NAMES = [
@@ -35,7 +36,8 @@ export class ServerBot extends ServerPlayer {
         const classData = this.classData;
         for (let lvl = this.level; lvl < targetLevel; lvl++) {
             this.level++;
-            this.xpNeeded = Math.floor(100 * Math.pow(1.18, this.level - 1));
+            this.xpNeeded = xpNeededForLevel(this.level);
+            this.maxLevelReached = Math.max(this.maxLevelReached || 1, this.level);
             this.maxHp += 10;
             if (classData?.levelBonus) {
                 try { classData.levelBonus(this, this.level); } catch (_) {}

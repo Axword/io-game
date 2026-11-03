@@ -20,7 +20,7 @@ const server = app.listen(SERVER_CONFIG.PORT, () => {
 app.use(express.static(path.join(__dirname, '../')));
 app.get('/health', (req, res) => res.json({ ok: true, rooms: gameCache.getAllRooms().length }));
 
-const wss = new WebSocketServer({ server });
+const wss = new WebSocketServer({ server, maxPayload: 16 * 1024 });
 
 wss.on('connection', (ws, req) => {
     ws.id = uuidv4();
@@ -83,6 +83,15 @@ function handleMessage(ws, msg) {
         case 'input':
             handleInput(ws, payload);
             break;
+
+        case 'travelWorld': {
+            const room = gameCache.getRoomBySocket(ws);
+            const player = room?.getPlayerBySocket(ws);
+            if (!player || !room.travelWorld(player.id, payload?.targetWorldId)) send(ws, {
+                type: 'worldTravelDenied', data: { message: 'Portal jest niedostępny. Podejdź do centrum i osiągnij wymagany poziom.' }
+            });
+            break;
+        }
 
         case 'upgradeSelect':
             handleUpgradeSelect(ws, payload);
@@ -160,7 +169,9 @@ function handleJoinRoom(ws, data) {
 
         room = new GameRoom(roomId, {
             difficulty,
-            bots
+            bots,
+            maxPlayers: data?.maxPlayers,
+            privacy: data?.privacy
         });
 
         gameCache.saveRoom(roomId, room);
@@ -168,7 +179,16 @@ function handleJoinRoom(ws, data) {
         console.log('[WS] Created room:', roomId);
     }
 
-    // Jeśli ludzi jest już 8, nie wpuszczamy.
+    const previousRoom = gameCache.getRoomBySocket(ws);
+    const previousPlayer = previousRoom?.getPlayerBySocket(ws);
+    if (previousRoom === room && previousPlayer) {
+        room.clearSocketState(ws);
+        sendRoomJoined(ws, room, previousPlayer);
+        room.getWorldState(previousPlayer.worldId || 0).broadcastState();
+        return;
+    }
+
+    // Validate the destination before detaching an existing participant.
     if (room.getHumanCount && room.getHumanCount() >= room.maxParticipants) {
         send(ws, {
             type: 'error',
@@ -181,25 +201,19 @@ function handleJoinRoom(ws, data) {
     if (room.makeRoomForHumanPlayer) {
         room.makeRoomForHumanPlayer();
     }
+    if (previousRoom && previousPlayer) {
+        previousRoom.removePlayer(previousPlayer.id);
+        gameCache.unlinkSocket(ws);
+        previousRoom.isEmpty();
+    }
     // 5. Dodanie gracza
+    ws._equipmentRevisions = new Map();
+    ws._snapshotEntitiesRoom = null;
+    ws._snapshotEntities = new Map();
     const player = room.addPlayer(ws, name, cls);
     gameCache.linkSocket(ws, room.id);
 
-    send(ws, {
-        type: 'roomJoined',
-        roomId: room.id,
-        playerId: player.id,
-        state: room.state,
-        data: {
-            roomId: room.id,
-            playerId: player.id,
-            state: room.state,
-            players: room.getPlayerList(),
-            bots: room.getBotList(),
-            difficulty: room.difficulty,
-            gameTime: room.gameTime
-        }
-    });
+    sendRoomJoined(ws, room, player);
 
     broadcastToRoom(room, {
         type: 'playerJoined',
@@ -215,7 +229,23 @@ function handleJoinRoom(ws, data) {
     }
 }
 
+function sendRoomJoined(ws, room, player) {
+    const arena = room.getWorldState(player.worldId || 0);
+    send(ws, {
+        type: 'roomJoined', roomId: room.id, playerId: player.id, state: room.state,
+        data: {
+            roomId: room.id, playerId: player.id, state: room.state,
+            players: room.getPlayerList(), bots: arena.getBotList(), difficulty: room.difficulty,
+            gameTime: arena.gameTime, worldTime: arena.gameTime, worldId: player.worldId,
+            unlockedWorlds: room.unlockedWorlds(player)
+        }
+    });
+}
+
 function handleLeaveRoom(ws) {
+    ws._snapshotEntitiesRoom = null;
+    ws._snapshotEntities = new Map();
+    ws._equipmentRevisions = new Map();
     const room = gameCache.getRoomBySocket(ws);
     if (!room) return;
 
@@ -237,6 +267,9 @@ function handleInput(ws, data) {
 
     room.queueInput(player.id, {
         keys: data?.keys || {},
+        ...(Number.isFinite(data?.moveX) && Number.isFinite(data?.moveY) ? {
+            moveX: Math.max(-1, Math.min(1, data.moveX)), moveY: Math.max(-1, Math.min(1, data.moveY))
+        } : {}),
         mouseX: data?.mouseX ?? 0,
         mouseY: data?.mouseY ?? 0,
         mouseClicked: !!data?.mouseClicked

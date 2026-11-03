@@ -3,6 +3,7 @@ import { rng, getZoneIdx } from '../../shared/utils/math.js';
 import { MONSTER_CONFIG } from '../../shared/config/monsters.js';
 import { ZONES, WORLD } from '../../shared/config/constants.js';
 import { ServerBullet } from './bullet.js';
+import { updateWorldEnemy } from '../../shared/systems/enemyBehavior.js';
 
 export class ServerMonster {
     constructor(x, y, zoneIdx, zones, hpMult = 1.0) {
@@ -153,6 +154,18 @@ export class ServerMonster {
     }
 
     update(dt, targets, bullets) {
+        if (this.archetypeId) {
+            updateWorldEnemy(this, dt, targets, shot => {
+                if (bullets.length >= 650) return;
+                const bullet = new ServerBullet(shot.x, shot.y, shot.vx, shot.vy, shot.dmg, this.id, 'wand', shot.size, 0, 0, shot.col);
+                bullet.ownerType = 'monster';
+                bullet.worldId = this.worldId;
+                bullet.life = shot.life;
+                bullets.push(bullet);
+            });
+            this.hitTimer = Math.max(0, this.hitTimer - dt);
+            return;
+        }
         if (this.state === 'attacking') {
             this.handleAttacking(dt, targets, bullets);
         } else if (this.state === 'returning') {
@@ -335,15 +348,16 @@ export class ServerMonster {
     toState() {
         return {
             id: this.id,
-            x: this.x,
-            y: this.y,
+            x: Math.round(this.x * 10) / 10,
+            y: Math.round(this.y * 10) / 10,
             hp: Math.round(this.hp),
             maxHp: Math.round(this.maxHp),
             zoneIdx: this.zoneIdx,
             isElite: this.isElite,
             isBoss: this.isBoss,
             type: this.type,
-            sz: this.sz
+            sz: this.sz,
+            ...(this.archetypeId ? { archetypeId: this.archetypeId, worldId: this.worldId, col: this.col, telegraph: this.telegraph ? { ...this.telegraph } : null } : {})
         };
     }
 }

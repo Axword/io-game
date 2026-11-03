@@ -1,3 +1,7 @@
+import { disposeObject } from '../utils/geometry.js';
+const BULLET_GEOMETRIES = new Map();
+let flameGeometry;
+let boltTrailGeometry;
 export class Bullet {
     constructor(x, y, vx, vy, dmg, owner, wtype, sz, bounces, pierce, col, scene) {
         this.x = x;
@@ -82,32 +86,73 @@ export class Bullet {
     }
 
     createMesh(wtype, sz, col) {
-        const geo = this.createGeometry(wtype, sz);
-        const mat = new THREE.MeshBasicMaterial({
-            color: col,
-            transparent: ['mine', 'poison', 'laser', 'fireball'].includes(wtype),
-            opacity: this.getOpacity(wtype),
-            side: THREE.DoubleSide
-        });
-        this.mesh = new THREE.Mesh(geo, mat);
+        const fire = wtype === 'fireball' || wtype === 'meteor';
+        const bolt = wtype === 'bow' || wtype === 'wand';
+        const hostile = this.owner === 'boss' || this.owner === 'monster';
+        const color = fire ? 0xff7a12 : (bolt ? (hostile ? 0xd932bd : 0x09b7dc) : col);
+        this.mesh = new THREE.Mesh(this.createGeometry(wtype, sz), new THREE.MeshBasicMaterial({
+            color, transparent: ['mine','poison','laser'].includes(wtype),
+            opacity: this.getOpacity(wtype), side: THREE.DoubleSide,
+            depthWrite: !['poison','laser'].includes(wtype)
+        }));
         this.mesh.position.set(this.x, this.y, 2.5);
-
-        if (wtype === 'axe' || wtype === 'sword') this.createOutlines(wtype, sz, col);
-        if (wtype === 'bow' || wtype === 'knife') this.mesh.rotation.z = Math.atan2(this.vy, this.vx);
+        if (wtype === 'axe' || wtype === 'sword' || wtype === 'knife') this.createOutlines(wtype, sz, col);
+        if (wtype === 'knife') this.mesh.rotation.z = Math.atan2(this.vy, this.vx);
         if (wtype === 'laser') this.createLaserGlow(sz, col);
-        if (wtype === 'fireball') this.createFireGlow(sz, col);
-
+        if (fire || bolt) {
+            const core = new THREE.Mesh(this.createGeometry(wtype === 'meteor' ? 'fireball' : wtype, sz * .62),
+                new THREE.MeshBasicMaterial({ color: fire ? 0xffed40 : (hostile ? 0xffb9ec : 0x9cf4ff) }));
+            core.position.z = .04;
+            this.mesh.add(core);
+        }
         this.scene.add(this.mesh);
+        if (fire || bolt) this.createGraphicTrail(fire);
+    }
+
+    createGraphicTrail(fire) {
+        if (fire && !flameGeometry) {
+            const shape = new THREE.Shape();
+            const points = [[0,.55],[-1.7,.28],[-3.8,1.1],[-2.6,.12],[-5.5,.3],[-2.4,-.25],[-4.1,-1.05],[-1.8,-.42],[0,-.55]];
+            points.forEach(([x,y], i) => shape[i ? 'lineTo' : 'moveTo'](x,y));
+            shape.closePath();
+            flameGeometry = new THREE.ShapeGeometry(shape);
+            flameGeometry.userData.shared = true;
+        }
+        if (!fire && !boltTrailGeometry) {
+            const shape = new THREE.Shape();
+            shape.moveTo(0,.36); shape.lineTo(-5,0); shape.lineTo(0,-.36); shape.closePath();
+            boltTrailGeometry = new THREE.ShapeGeometry(shape);
+            boltTrailGeometry.userData.shared = true;
+        }
+        const mesh = new THREE.Mesh(fire ? flameGeometry : boltTrailGeometry,
+            new THREE.MeshBasicMaterial({color: fire ? 0xff9630 : 0x4ed8eb, transparent:true, opacity:fire ? .86 : .48, depthWrite:false}));
+        if (fire) {
+            const inner = new THREE.Mesh(flameGeometry, new THREE.MeshBasicMaterial({color:0xffdd38, transparent:true, opacity:.88, depthWrite:false}));
+            inner.scale.set(.65,.45,1); inner.position.z = .02; mesh.add(inner);
+        }
+        this.scene.add(mesh);
+        this.trail.push({ mesh });
+        this.updateTrail(0);
     }
 
     getOpacity(wtype) {
-        return { mine: 0.7, poison: 0.35, laser: 0.8, fireball: 0.9 }[wtype] || 1;
+        return { mine: 0.7, poison: 0.35, laser: 0.8, fireball: 1 }[wtype] || 1;
     }
 
     createGeometry(wtype, sz) {
+        const key = wtype + ':' + Number(sz).toFixed(3) + (wtype === 'laser' ? ':' + this.laserRange + ':' + this.laserWidth : '');
+        if (BULLET_GEOMETRIES.has(key)) return BULLET_GEOMETRIES.get(key);
+        const geometry = this.makeGeometry(wtype, sz);
+        if (BULLET_GEOMETRIES.size < 256) {
+            geometry.userData.shared = true;
+            BULLET_GEOMETRIES.set(key, geometry);
+        }
+        return geometry;
+    }
+    makeGeometry(wtype, sz) {
         switch (wtype) {
             case 'bow':
-                return new THREE.PlaneGeometry(sz * 20, sz * 6);
+                return new THREE.CircleGeometry(sz * 7, 20);
             case 'knife': {
                 const s = new THREE.Shape();
                 const scale = sz * 24;
@@ -127,13 +172,7 @@ export class Bullet {
               hole.absarc(0, 0, scale * 0.18, 0, Math.PI * 2, true);
               s.holes.push(hole);
 
-              return new THREE.ExtrudeGeometry(s, {
-                depth: scale * 0.08,
-                bevelEnabled: true,
-                bevelThickness: scale * 0.015,
-                bevelSize: scale * 0.015,
-                bevelSegments: 3
-              });
+              return new THREE.ShapeGeometry(s);
 }
             case 'mine':
                 return new THREE.CircleGeometry(sz * 10, 16);
@@ -147,7 +186,7 @@ export class Bullet {
                 const segments = 24;
                 for (let i = 0; i < segments; i++) {
                     const a = (i / segments) * Math.PI * 2;
-                    const wobble = r * (0.85 + Math.random() * 0.3);
+                    const wobble = r * (0.94 + Math.sin(i * 2.6) * 0.06);
                     if (i === 0) s.moveTo(Math.cos(a) * wobble, Math.sin(a) * wobble);
                     else s.lineTo(Math.cos(a) * wobble, Math.sin(a) * wobble);
                 }
@@ -237,13 +276,13 @@ export class Bullet {
         const innerGeo = this.createGeometry(wtype, sz * 1.10);
 
         this.whiteOutline = new THREE.Mesh(outerGeo, new THREE.MeshBasicMaterial({
-            color: 0xffffff, side: THREE.DoubleSide
+            color: 0xedeef5, side: THREE.DoubleSide
         }));
         this.whiteOutline.position.set(this.x, this.y, 2.35);
         this.scene.add(this.whiteOutline);
 
         this.outline = new THREE.Mesh(innerGeo, new THREE.MeshBasicMaterial({
-            color: 0x000000, side: THREE.DoubleSide
+            color: 0x252338, side: THREE.DoubleSide
         }));
         this.outline.position.set(this.x, this.y, 2.4);
         this.scene.add(this.outline);
@@ -271,6 +310,7 @@ export class Bullet {
 
     updatePosition() {
         if (!this.mesh) return;
+        this.updateTrail(0);
         this.mesh.position.set(this.x, this.y, 2.5);
         switch (this.wtype) {
             case 'bow':
@@ -280,11 +320,11 @@ export class Bullet {
             }
 
             case 'axe': {
-                this.mesh.rotation.z = Date.now() * 0.012;
+                this.mesh.rotation.z = this.rotation ?? this.animTime * 10;
                 break;
             }
             case 'sword': {
-                this.mesh.rotation.z = this.rotation ?? this.angle ?? (Date.now() * 0.006);
+                this.mesh.rotation.z = this.rotation ?? this.angle ?? this.animTime * 6;
                 break;
             }
             case 'laser': {
@@ -312,6 +352,16 @@ export class Bullet {
             this.glow.position.set(this.x, this.y, 2.3);
             this.glow.rotation.z = this.mesh.rotation.z;
         }
+    }
+
+    // Online state owns motion and hits. Only advance the visual clock here.
+    updateVisuals(dt) {
+        this.animTime += dt;
+        this.updateAnimations(dt);
+        if (this.wtype === 'axe' && this.rotation === undefined) this.mesh.rotation.z = this.animTime * 10;
+        if (this.outline) this.outline.rotation.z = this.mesh.rotation.z;
+        if (this.whiteOutline) this.whiteOutline.rotation.z = this.mesh.rotation.z;
+        this.updateTrail(dt);
     }
 
 
@@ -437,13 +487,8 @@ export class Bullet {
     updateAnimations(dt) {
         switch (this.wtype) {
             case 'fireball': {
-                const s = 1 + Math.sin(this.animTime * 6) * 0.25;
-                this.mesh.scale.set(s, s, 1);
-                if (this.glow) {
-                    const gs = 1 + Math.sin(this.animTime * 4) * 0.35;
-                    this.glow.scale.set(gs, gs, 1);
-                    this.glow.material.opacity = 0.12 + Math.sin(this.animTime * 5) * 0.08;
-                }
+                const scale = 1 + Math.sin(this.animTime * 12) * .035;
+                this.mesh.scale.set(scale, scale, 1);
                 break;
             }
             case 'poison': {
@@ -482,46 +527,19 @@ export class Bullet {
     }
 
     updateTrail(dt) {
-        if (!['bow', 'knife', 'meteor', 'fireball', 'axe'].includes(this.wtype)) return;
-
-        this.trailTimer += dt;
-        if (this.trailTimer < 0.03) return;
-        this.trailTimer = 0;
-
-        if (this.trail.length > 10) {
-            const old = this.trail.shift();
-            this.scene.remove(old.mesh);
-        }
-
-        const size = this.wtype === 'fireball' ? this.sz * 8 :
-                     this.wtype === 'meteor' ? this.sz * 10 :
-                     this.wtype === 'axe' ? this.sz * 6 :
-                     this.sz * 3;
-
-        const trailCol = this.wtype === 'fireball' ? 0xff4400 :
-                         this.wtype === 'meteor' ? 0xff8800 :
-                         this.col;
-
-        const geo = new THREE.CircleGeometry(size, 6);
-        const mat = new THREE.MeshBasicMaterial({
-            color: trailCol, transparent: true, opacity: 0.35
-        });
-        const mesh = new THREE.Mesh(geo, mat);
-        mesh.position.set(this.x, this.y, 2.2);
-        this.scene.add(mesh);
-        this.trail.push({ mesh, life: 0.2 });
-
-        this.trail = this.trail.filter(p => {
-            p.life -= dt;
-            if (p.life <= 0) {
-                this.scene.remove(p.mesh);
-                return false;
-            }
-            p.mesh.material.opacity = (p.life / 0.2) * 0.35;
-            const s = 0.5 + (p.life / 0.2) * 0.5;
-            p.mesh.scale.set(s, s, 1);
-            return true;
-        });
+        if (!this.trail.length) return;
+        const trail = this.trail[0].mesh;
+        const dx = this._lastVisualX === undefined ? this.vx : this.x - this._lastVisualX;
+        const dy = this._lastVisualY === undefined ? this.vy : this.y - this._lastVisualY;
+        if (Math.abs(dx) + Math.abs(dy) > .0001) this._trailAngle = Math.atan2(dy, dx);
+        this._lastVisualX = this.x;
+        this._lastVisualY = this.y;
+        const fire = this.wtype === 'fireball' || this.wtype === 'meteor';
+        const radius = this.sz * (fire ? 12 : 5);
+        trail.position.set(this.x, this.y, 2.25);
+        trail.rotation.z = this._trailAngle || 0;
+        const flicker = fire ? 1 + Math.sin(this.animTime * 24) * .055 : 1;
+        trail.scale.set(radius * flicker, radius, 1);
     }
 
     canHit() {
@@ -550,12 +568,9 @@ export class Bullet {
     }
 
     destroy() {
-        if (this.mesh) this.scene.remove(this.mesh);
-        if (this.outline) this.scene.remove(this.outline);
-        if (this.whiteOutline) this.scene.remove(this.whiteOutline);
-        if (this.glow) this.scene.remove(this.glow);
-        this.trail.forEach(p => this.scene.remove(p.mesh));
-        this.trail = [];
+        for (const mesh of [this.mesh, this.outline, this.whiteOutline, this.glow]) disposeObject(mesh);
+        for (const particle of this.trail) disposeObject(particle.mesh);
+        this.trail.length = 0;
         this.lingeredEntities.clear();
     }
 }

@@ -91,3 +91,7 @@ lerna-debug.log
 # System Files
 .DS_Store
 Thumbs.db
+
+# Local QA captures and reports
+output/playwright/
+output/test-results/

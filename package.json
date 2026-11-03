@@ -1,0 +1,26 @@
+{
+  "name": "arena-io",
+  "version": "1.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node server/server.js",
+    "start:solo": "node scripts/serve.mjs",
+    "test": "node --test tests/*.test.mjs",
+    "test:solo": "node tests/solo-runs.mjs",
+    "test:browser": "node tests/browser-qa.mjs",
+    "test:multiplayer": "node tests/multiplayer-load.mjs",
+    "test:campaign": "node tests/world-campaign.mjs",
+    "test:mobile": "node tests/mobile-qa.mjs",
+    "test:world-load": "node tests/worlds-multiplayer-load.mjs"
+  },
+  "dependencies": {
+    "three": "0.128.0",
+    "ws": "^8.18.0",
+    "express": "^4.21.0",
+    "uuid": "^10.0.0"
+  },
+  "devDependencies": {
+    "playwright": "^1.56.0"
+  }
+}

@@ -113,7 +113,9 @@ export class WebSocketClient {
         difficulty = 'medium',
         bots = true,
         quickJoin = false,
-        create = false
+        create = false,
+        maxPlayers = 8,
+        privacy = 'public'
     }) {
         if (!this.connected) return { online: false };
 
@@ -124,7 +126,9 @@ export class WebSocketClient {
             difficulty,
             bots,
             quickJoin,
-            create
+            create,
+            maxPlayers,
+            privacy
         };
 
         console.log('[WS] joinRoom payload:', payload);
@@ -165,20 +169,11 @@ export class WebSocketClient {
     }
     sendInput(inputData) {
         if (!this.connected || !this.playerId) return;
-
-        this.send('input', {
-            keys: inputData.keys || {},
-            mouseX: inputData.mouseX ?? 0,
-            mouseY: inputData.mouseY ?? 0,
-            mouseClicked: !!inputData.mouseClicked
-        });
+        this.send('input', inputData);
     }
     sendUpgradeSelect(upgradeKey) {
         if (!this.connected || !this.playerId) return;
-        this.send('upgradeSelect', {
-            playerId: this.playerId,
-            data: { upgradeKey }
-        });
+        this.send('upgradeSelect', { upgradeKey });
     }
 
     sendPing(t) {
@@ -195,6 +190,11 @@ export class WebSocketClient {
         if (!this.connected || !this.playerId) return;
 
         this.send('respawn', {});
+    }
+
+    sendWorldTravel(targetWorldId) {
+        if (!this.connected || !this.playerId) return;
+        this.send('travelWorld', { targetWorldId });
     }
 
     sendPermUpgrade(id, step) {

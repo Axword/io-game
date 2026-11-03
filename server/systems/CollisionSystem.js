@@ -1,12 +1,20 @@
 import { ServerBullet } from '../entities/bullet.js';
+import { SpatialHash, segmentDistanceSquared } from '../../shared/utils/SpatialHash.js';
 
 export class CollisionSystem {
     constructor() {
         this._targetBuf = [];
+        this.grid = new SpatialHash();
+        this.candidates = [];
     }
 
     checkBulletCollisions(bullets, monsters, players, bots, bosses) {
+        this.grid.build(monsters);
         for (const b of bullets) {
+            if (b.life <= 0) {
+                if (b.isExplosive && !b.hasExploded) this.handleExplosion(b, monsters, bosses, players, bots);
+                continue;
+            }
             if (b.ownerType === 'monster' || b.ownerType === 'boss') {
                 this.checkEnemyBullet(b, players, bots);
                 continue;
@@ -36,6 +44,9 @@ export class CollisionSystem {
     }
 
     _getBulletTargets(b, monsters, bots) {
+        const dx = b.x - (b.prevX ?? b.x), dy = b.y - (b.prevY ?? b.y);
+        const radius = this.grid.maxRadius + b.sz * (b.wtype === 'sword' ? 60 : 12) + Math.hypot(dx, dy) / 2;
+        monsters = this.grid.query(b.x - dx / 2, b.y - dy / 2, radius, this.candidates);
         if (b.ownerType === 'monster' || b.ownerType === 'boss') return monsters;
         if (!bots || bots.length === 0) return monsters;
 
@@ -82,7 +93,7 @@ export class CollisionSystem {
                     ? targetRadius * 0.75 + b.sz * 7
                     : targetRadius * 0.75 + b.sz * 3;
 
-            const dist = Math.hypot(b.x - m.x, b.y - m.y);
+            const dist = Math.sqrt(segmentDistanceSquared(m.x, m.y, b.prevX ?? b.x, b.prevY ?? b.y, b.x, b.y));
             if (dist < hitR) {
                 if (m.isBot) {
                     const pvpDmg = b.dmg * 0.35;
@@ -114,12 +125,13 @@ export class CollisionSystem {
     }
 
     checkBulletVsBosses(b, bosses, players) {
+        if (b.life <= 0) return;
         for (const boss of bosses) {
             if (boss.hp <= 0) continue;
             if (b.hit.has(boss)) continue;
 
-            const hitR = boss.sz * 0.8 + b.sz * 3;
-            const dist = Math.hypot(b.x - boss.x, b.y - boss.y);
+            const hitR = boss.sz * 0.8 + b.sz * (b.wtype === 'sword' ? 60 : 7);
+            const dist = Math.sqrt(segmentDistanceSquared(boss.x, boss.y, b.prevX ?? b.x, b.prevY ?? b.y, b.x, b.y));
             if (dist < hitR) {
                 const finalDmg = this.calculateDamage(b, boss);
                 boss.takeDamage(finalDmg, b.ownerEntity);
@@ -370,7 +382,7 @@ export class CollisionSystem {
         for (const player of players) {
             if (!player || player.hp <= 0) continue;
             for (const boss of bosses) {
-                if (boss.hp <= 0) continue;
+                if (boss.hp <= 0 || boss.spawnTimer > 0) continue;
                 const dist = Math.hypot(boss.x - player.x, boss.y - player.y);
                 const collisionDist = boss.sz * 0.8 + 20;
                 if (dist < collisionDist) player.takeDamage(boss.dmg * dt * 3);
@@ -382,7 +394,7 @@ export class CollisionSystem {
         for (const bot of bots) {
             if (!bot || bot.hp <= 0) continue;
             for (const boss of bosses) {
-                if (boss.hp <= 0) continue;
+                if (boss.hp <= 0 || boss.spawnTimer > 0) continue;
                 const dist = Math.hypot(boss.x - bot.x, boss.y - bot.y);
                 const collisionDist = boss.sz * 0.8 + 20;
                 if (dist < collisionDist) bot.takeDamage(boss.dmg * dt * 3 * 0.4);

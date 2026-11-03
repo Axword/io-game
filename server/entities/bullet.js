@@ -166,28 +166,21 @@ export class ServerBullet {
         return {
             id: this.id,
 
-            x: this.x,
-            y: this.y,
-            vx: this.vx || 0,
-            vy: this.vy || 0,
+            x: Math.round(this.x * 10) / 10,
+            y: Math.round(this.y * 10) / 10,
+            ...(this.vx ? { vx: Math.round(this.vx * 100) / 100 } : {}),
+            ...(this.vy ? { vy: Math.round(this.vy * 100) / 100 } : {}),
 
             wtype: this.wtype,
             sz: this.sz || 1,
             col: this.col,
 
-            life: this.life,
+            life: Math.round(this.life * 100) / 100,
 
             ownerId: this.ownerId || null,
 
-            angle: this.angle,
-            rotation: this.rotation,
-
-            pierce: this.pierce || 0,
-            bounces: this.bounces || 0,
-
-            laserAngle: this.laserAngle,
-            laserRange: this.laserRange,
-            laserWidth: this.laserWidth
+            ...(this.wtype === 'sword' || this.wtype === 'axe' ? { angle: this.angle, rotation: this.rotation } : {}),
+            ...(this.wtype === 'laser' ? { laserAngle: this.laserAngle, laserRange: this.laserRange, laserWidth: this.laserWidth } : {})
         };
 
     }

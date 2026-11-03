@@ -1,80 +1,52 @@
-export function mkShape(type, size, col) {
-    let geo;
-    
-    if (type === 'sq') {
-        geo = new THREE.PlaneGeometry(size, size);
-    } else if (type === 'cir') {
-        geo = new THREE.CircleGeometry(size * 0.6, 24);
-    } else if (type === 'tri') {
-        const s = new THREE.Shape();
-        s.moveTo(0, size * 0.7);
-        s.lineTo(-size * 0.65, -size * 0.45);
-        s.lineTo(size * 0.65, -size * 0.45);
-        s.closePath();
-        geo = new THREE.ShapeGeometry(s);
-    } else if (type === 'dia') {
-        const s = new THREE.Shape();
-        s.moveTo(0, size * 0.8);
-        s.lineTo(size * 0.55, 0);
-        s.lineTo(0, -size * 0.8);
-        s.lineTo(-size * 0.55, 0);
-        s.closePath();
-        geo = new THREE.ShapeGeometry(s);
-    } else if (type === 'pent') {
-        const s = new THREE.Shape();
-        for (let i = 0; i < 5; i++) {
-            const a = i * Math.PI * 2 / 5 - Math.PI / 2;
-            s[i === 0 ? 'moveTo' : 'lineTo'](Math.cos(a) * size * .65, Math.sin(a) * size * .65);
+// Shared unit geometry keeps crowds from allocating one GPU buffer per entity.
+const SHAPE_GEOMETRIES = new Map();
+function unitShape(type) {
+    if (SHAPE_GEOMETRIES.has(type)) return SHAPE_GEOMETRIES.get(type);
+    let geometry;
+    if (type === 'sq') geometry = new THREE.PlaneGeometry(1, 1);
+    else if (type === 'cir') geometry = new THREE.CircleGeometry(0.6, 32);
+    else {
+        const path = new THREE.Shape();
+        const special = { tri: [[0,.7],[-.65,-.45],[.65,-.45]], dia: [[0,.8],[.55,0],[0,-.8],[-.55,0]] };
+        const points = special[type];
+        if (points) points.forEach(([x,y], i) => path[i ? 'lineTo' : 'moveTo'](x,y));
+        else {
+            const sides = { pent:5, hex:6, hept:7, oct:8, non:9 }[type] || 5;
+            for (let i = 0; i < sides; i++) {
+                const angle = i * Math.PI * 2 / sides + Math.PI / 2;
+                path[i ? 'lineTo' : 'moveTo'](Math.cos(angle) * .65, Math.sin(angle) * .65);
+            }
         }
-        s.closePath();
-        geo = new THREE.ShapeGeometry(s);
-    } else if (type === 'hex') {
-        const s = new THREE.Shape();
-        for (let i = 0; i < 6; i++) {
-            const a = i * Math.PI * 2 / 6;
-            s[i === 0 ? 'moveTo' : 'lineTo'](Math.cos(a) * size * .65, Math.sin(a) * size * .65);
-        }
-        s.closePath();
-        geo = new THREE.ShapeGeometry(s);
-    } else if (type === 'hept') {
-        const s = new THREE.Shape();
-        for (let i = 0; i < 7; i++) {
-            const a = i * Math.PI * 2 / 7 - Math.PI / 2;
-            s[i === 0 ? 'moveTo' : 'lineTo'](Math.cos(a) * size * .65, Math.sin(a) * size * .65);
-        }
-        s.closePath();
-        geo = new THREE.ShapeGeometry(s);
-    } else if (type === 'oct') {
-        const s = new THREE.Shape();
-        for (let i = 0; i < 8; i++) {
-            const a = i * Math.PI * 2 / 8;
-            s[i === 0 ? 'moveTo' : 'lineTo'](Math.cos(a) * size * .65, Math.sin(a) * size * .65);
-        }
-        s.closePath();
-        geo = new THREE.ShapeGeometry(s);
-    } else if (type === 'non') {
-        const s = new THREE.Shape();
-        for (let i = 0; i < 9; i++) {
-            const a = i * Math.PI * 2 / 9 - Math.PI / 2;
-            s[i === 0 ? 'moveTo' : 'lineTo'](Math.cos(a) * size * .65, Math.sin(a) * size * .65);
-        }
-        s.closePath();
-        geo = new THREE.ShapeGeometry(s);
-    } else {
-        geo = new THREE.PlaneGeometry(size, size);
+        path.closePath();
+        geometry = new THREE.ShapeGeometry(path);
     }
-    
-    const mat = new THREE.MeshBasicMaterial({ color: col });
-    return new THREE.Mesh(geo, mat);
+    geometry.userData.shared = true;
+    SHAPE_GEOMETRIES.set(type, geometry);
+    return geometry;
 }
-
+export function mkShape(type, size, col) {
+    const mesh = new THREE.Mesh(unitShape(type), new THREE.MeshBasicMaterial({ color: col }));
+    mesh.scale.set(size, size, 1);
+    mesh.userData.baseScale = size;
+    return mesh;
+}
 export function mkRing(r, thick, col, opacity = 0.35) {
-    const sh = new THREE.Shape();
-    sh.absarc(0, 0, r, 0, Math.PI * 2, false);
-    const h = new THREE.Path();
-    h.absarc(0, 0, r - thick, 0, Math.PI * 2, true);
-    sh.holes.push(h);
-    const geo = new THREE.ShapeGeometry(sh);
-    const mat = new THREE.MeshBasicMaterial({ color: col, transparent: true, opacity });
-    return new THREE.Mesh(geo, mat);
+    return new THREE.Mesh(new THREE.RingGeometry(Math.max(0, r - thick), r, 40),
+        new THREE.MeshBasicMaterial({color:col, transparent:opacity < 1, opacity, depthWrite:opacity >= 1}));
+}
+export function disposeObject(object) {
+    if (!object || object.userData?.disposed) return;
+    object.userData ||= {};
+    object.userData.disposed = true;
+    object.parent?.remove(object);
+    object.traverse?.(node => {
+        if (node.geometry && !node.geometry.userData?.shared) node.geometry.dispose();
+        const materials = Array.isArray(node.material) ? node.material : [node.material];
+        for (const material of materials) {
+            if (!material || material.userData?.shared) continue;
+            // Text sprites own their canvas texture; shared asset textures opt out.
+            if (material.map && !material.map.userData?.shared) material.map.dispose();
+            material.dispose();
+        }
+    });
 }

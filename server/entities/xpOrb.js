@@ -11,7 +11,6 @@ export class ServerXpOrb {
     }
 
     update(dt, player) {
-        this.life -= dt;
         if (this.life <= 0) return false;
         if (!player || player.hp <= 0) return false;
 
@@ -33,9 +32,9 @@ export class ServerXpOrb {
     toState() {
         return {
             id: this.id,
-            x: this.x,
-            y: this.y,
-            val: this.val
+            x: Math.round(this.x * 10) / 10,
+            y: Math.round(this.y * 10) / 10,
+            val: Math.round(this.val * 10) / 10
         };
     }
 }

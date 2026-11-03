@@ -1,3 +1,4 @@
+import { applyBookStatsDelta } from '../../shared/systems/bookStats.js';
 import { WEAPONS, ALL_WEAPONS } from '../../shared/config/weapons.js';
 import { BOOKS, ALL_BOOKS } from '../../shared/config/books.js';
 import { UPGRADE_TYPES } from '../../shared/config/upgrades.js';
@@ -10,8 +11,8 @@ export class UpgradeSystem {
         this.permStats = permStats;
     }
 
-    rollRarity() {
-        const luck = this.permStats.luck || 0;
+    rollRarity(player) {
+        const luck = player?.luck || this.permStats.luck || 0;
         const weights = RARITIES.map((r, i) => {
             const boost = i * luck * 0.02;
             return Math.max(0.01, r.w + boost);
@@ -46,7 +47,7 @@ export class UpgradeSystem {
         const availNewWeapons = ALL_WEAPONS.filter(t => !ownedWeaponTypes.includes(t));
         const availNewBooks = ALL_BOOKS.filter(t => !ownedBookTypes.includes(t));
 
-        if (emptyWeaponSlot > -1 && availNewWeapons.length > 0 && Math.random() < 0.25) {
+        if (emptyWeaponSlot > -1 && availNewWeapons.length > 0 && ((player.level === 2 && ownedWeaponTypes.length === 1) || Math.random() < 0.25)) {
             const wt = availNewWeapons[Math.floor(Math.random() * availNewWeapons.length)];
             const wd = WEAPONS[wt];
             cards.push({
@@ -58,7 +59,8 @@ export class UpgradeSystem {
                 wname: 'Nowa broń',
                 rarId: 2,
                 val: '',
-                upgradeId: 'newWeapon_' + wt
+                upgradeId: 'newWeapon_' + wt,
+                upgradeKey: 'newWeapon_' + wt
             });
         }
 
@@ -74,7 +76,8 @@ export class UpgradeSystem {
                 wname: 'Nowa księga',
                 rarId: 2,
                 val: '',
-                upgradeId: 'newBook_' + bt
+                upgradeId: 'newBook_' + bt,
+                upgradeKey: 'newBook_' + bt
             });
         }
 
@@ -175,7 +178,7 @@ export class UpgradeSystem {
 
         for (const upgrade of selected) {
             const { itemType, item, itemTypeId, upgradeId, upgradeType, upgradeKey, isDuplicate } = upgrade;
-            const rarId = this.rollRarity();
+            const rarId = this.rollRarity(player);
             let value = this.getRarityValue(upgradeType, rarId);
             if (isDuplicate) value *= 0.5;
 
@@ -254,6 +257,7 @@ export class UpgradeSystem {
     }
 
     applyUpgrade(card, player, weaponSystem) {
+        player.equipmentRevision = (player.equipmentRevision || 0) + 1;
         if (card.type === 'newWeapon') {
             const slot = player.weapons.findIndex(w => w === null);
             if (slot > -1) {
@@ -301,37 +305,8 @@ export class UpgradeSystem {
 
     applyBookStats(player, bookType) {
         const book = player.books.find(b => b && b.type === bookType);
-        if (!book) return;
-        const bd = BOOKS[bookType];
-        const level = book.level || 1;
-
-        if (bookType === 'vitality') {
-            const baseHp = CLASSES[player.cls].hp;
-            const bonus = Math.round(baseHp * book.stats.maxHp * level);
-            player.maxHp += bonus;
-            player.hp = Math.min(player.maxHp, player.hp + bonus);
-        } else if (bookType === 'speed') {
-            player.speed *= (1 + book.stats.moveSpeed * level);
-        } else if (bookType === 'cooldown') {
-            player.cooldownReduction = (player.cooldownReduction || 0) + (book.stats.cooldownReduction * level);
-        } else if (bookType === 'magnet') {
-            player.magnetRange = (player.magnetRange || 100) + (book.stats.magnetRange * level);
-        } else if (bookType === 'critical') {
-            player.critChance = (player.critChance || 0) + (book.stats.critChance * level);
-            player.critDamage = (player.critDamage || 150) + (book.stats.critDamage * level);
-        } else if (bookType === 'damage') {
-            player.damageBonus = (player.damageBonus || 0) + (book.stats.damageBonus * level);
-        } else if (bookType === 'area') {
-            player.areaBonus = (player.areaBonus || 0) + (book.stats.areaBonus * level);
-        } else if (bookType === 'luck') {
-            this.permStats.luck = (this.permStats.luck || 0) + (book.stats.luck * level);
-        } else if (bookType === 'revival') {
-            player.revives = (player.revives || 0) + (book.stats.revives * level);
-        } else if (bookType === 'regeneration') {
-            player.regen = (player.regen || 0) + (book.stats.regen * level);
-        }
+        if (book) applyBookStatsDelta(player, book);
     }
-
     getStatName(upgradeId, weaponType) {
         if (weaponType === 'sword') {
             if (upgradeId === 'range') return 'orbit';

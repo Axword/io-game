@@ -1,29 +1,33 @@
 import { ServerMonster } from '../entities/monster.js';
 import { ServerBoss } from '../entities/boss.js';
 import { ServerXpOrb } from '../entities/xpOrb.js';
-import { rng, rngInt, getZoneIdx } from '../../shared/utils/math.js';
-import { BOSS_TYPES, BOSS_SPAWN_INTERVAL, DIFFICULTY_CONFIG, ZONES, VIEW } from '../../shared/config/constants.js';
+import { rng, getZoneIdx } from '../../shared/utils/math.js';
+import { BOSS_TYPES, DIFFICULTY_CONFIG, ZONES, VIEW, WORLD } from '../../shared/config/constants.js';
+import { getWorld } from '../../shared/config/worlds.js';
+import { configureWorldEnemy } from '../../shared/systems/enemyBehavior.js';
+import { resolveWorldMovement } from '../../shared/systems/worldRules.js';
+import { balancedBossHealth } from '../../shared/systems/encounterBalance.js';
 
 export class SpawnSystem {
     constructor(zones) {
         this.zones = zones || ZONES;
         this.monsterSpawnTimer = 0;
-        this.bossSpawnTimer = BOSS_SPAWN_INTERVAL;
+        this.bossSpawnTimer = 90;
         this.difficulty = 'medium';
         this.difficultyConfig = DIFFICULTY_CONFIG;
-        this.zoneLimits = [
-            { zone: 0, limit: 250, current: 0 },
-            { zone: 1, limit: 300, current: 0 },
-            { zone: 2, limit: 500, current: 0 },
-            { zone: 3, limit: 1200, current: 0 },
-            { zone: 4, limit: 1300, current: 0 }
-        ];
+        this.zoneLimits = this.zones.map((_, zone) => ({ zone, limit: 100, current: 0 }));
+        this.maxMonsters = 320;
+        this.spawnCursor = 0;
+        this.bossIndex = 0;
+        this.separationChecks = 0;
+        this.lastTargets = [];
+        this.worldId = 0;
+        this.gameTime = 0;
+        this.roomBudget = 320;
     }
 
-    setDifficulty(diff) {
-        if (this.difficultyConfig[diff]) {
-            this.difficulty = diff;
-        }
+    setDifficulty(difficulty) {
+        if (this.difficultyConfig[difficulty]) this.difficulty = difficulty;
     }
 
     getDifficultyMultipliers() {
@@ -31,164 +35,167 @@ export class SpawnSystem {
     }
 
     updateZoneCounts(monsters) {
-        for (const limit of this.zoneLimits) limit.current = 0;
-        for (const m of monsters) {
-            const zi = m.zoneIdx;
-            if (this.zoneLimits[zi]) this.zoneLimits[zi].current++;
-        }
+        for (const zone of this.zoneLimits) zone.current = 0;
+        for (const monster of monsters) if (monster.hp > 0 && this.zoneLimits[monster.zoneIdx]) this.zoneLimits[monster.zoneIdx].current++;
     }
 
     findNearestPlayer(x, y, players) {
-        let minDist = 9999;
-        for (const p of players) {
-            if (p.hp <= 0) continue;
-            const d = Math.hypot(p.x - x, p.y - y);
-            if (d < minDist) minDist = d;
-        }
-        return minDist;
+        let nearest = Infinity;
+        for (const player of players) if (player.hp > 0) nearest = Math.min(nearest, Math.hypot(player.x - x, player.y - y));
+        return nearest;
     }
 
     spawnMonster(monsters, players) {
-        if (!players || players.length === 0) return;
-        const WORLD = 12000;
-        const MARGIN = 800;
-        const SPAWN_DISTANCE = VIEW + 200;
-        const MAX_SPAWN_DISTANCE = VIEW + 800;
-        const PER_PLAYER_LIMIT = 50;
-
-        this.updateZoneCounts(monsters);
-        const weights = [30, 25, 20, 15, 10];
-        const availableZones = this.zoneLimits
-            .map((limit, idx) => ({ idx, limit, weight: weights[idx] }))
-            .filter(z => z.limit.current < z.limit.limit);
-
-        if (availableZones.length === 0) return;
-
-        const totalWeight = availableZones.reduce((sum, z) => sum + z.weight, 0);
-        let roll = Math.random() * totalWeight;
-        let zi = 0;
-        for (const zone of availableZones) {
-            roll -= zone.weight;
-            if (roll <= 0) { zi = zone.idx; break; }
+        if (!players?.length || monsters.length >= this.maxMonsters) return;
+        const humans = players.filter(player => player.hp > 0 && !player.isBot);
+        const candidates = humans.length ? humans : players.filter(player => player.hp > 0);
+        if (!candidates.length) return;
+        const player = candidates[this.spawnCursor++ % candidates.length];
+        let nearby = 0;
+        for (const monster of monsters) {
+            if (monster.hp > 0 && Math.abs(monster.x - player.x) < 1400 && Math.abs(monster.y - player.y) < 1400) nearby++;
         }
-        const z = this.zones[zi];
-
-        let spawnerPlayer = null;
-        for (const p of players) {
-            if (p.hp <= 0) continue;
-            const playerZone = getZoneIdx(p.x, p.y, this.zones);
-            const playerInZone = playerZone === zi;
-            const playerNearZone = Math.abs(playerZone - zi) <= 1;
-            if (playerInZone || playerNearZone) {
-                spawnerPlayer = p;
-                break;
-            }
-        }
-        if (!spawnerPlayer) return;
-
-        const monstersNearPlayer = monsters.filter(m => Math.hypot(m.x - spawnerPlayer.x, m.y - spawnerPlayer.y) < SPAWN_DISTANCE * 1.5).length;
-        if (monstersNearPlayer >= PER_PLAYER_LIMIT) return;
-
-        let x, y;
-        let attempts = 0;
-        let validSpawn = false;
-        do {
+        if (nearby >= 64) return;
+        for (let attempt = 0; attempt < 12; attempt++) {
             const angle = Math.random() * Math.PI * 2;
-            const distance = rng(SPAWN_DISTANCE, MAX_SPAWN_DISTANCE);
-            x = spawnerPlayer.x + Math.cos(angle) * distance;
-            y = spawnerPlayer.y + Math.sin(angle) * distance;
-            const distFromCenter = Math.hypot(x, y);
-            const inBounds = Math.abs(x) < WORLD / 2 - MARGIN && Math.abs(y) < WORLD / 2 - MARGIN;
-            const inZone = distFromCenter >= z.minR && distFromCenter <= z.maxR;
-            const tooCloseToPlayer = players.some(p => Math.hypot(p.x - x, p.y - y) < SPAWN_DISTANCE);
-            if (inBounds && inZone && !tooCloseToPlayer) validSpawn = true;
-            attempts++;
-        } while (!validSpawn && attempts < 20);
-
-        if (!validSpawn) return;
-
-        const diffMult = this.getDifficultyMultipliers();
-        const monster = new ServerMonster(x, y, zi, this.zones, diffMult.hpMult);
-        monsters.push(monster);
+            const distance = VIEW + rng(180, 500);
+            const x = player.x + Math.cos(angle) * distance;
+            const y = player.y + Math.sin(angle) * distance;
+            const world = getWorld(this.worldId);
+            if (Math.abs(x) >= world.bounds - 90 || Math.abs(y) >= world.bounds - 90 || this.findNearestPlayer(x, y, players) < VIEW + 80) continue;
+            if (world.obstacles.some(obstacle => Math.hypot(x - obstacle.x, y - obstacle.y) < obstacle.r + 45)) continue;
+            const zoneIdx = getZoneIdx(x, y, this.zones);
+            const monster = new ServerMonster(x, y, zoneIdx, this.zones, this.getDifficultyMultipliers().hpMult);
+            const totalWeight = world.enemies.reduce((sum, enemy) => sum + enemy.weight, 0);
+            let roll = Math.random() * totalWeight;
+            const archetype = world.enemies.find(enemy => (roll -= enemy.weight) <= 0) || world.enemies[0];
+            const difficulty = { easy: { hp: 0.8, damage: 0.75 }, medium: { hp: 1, damage: 1 },
+                hard: { hp: 1.25, damage: 1.2 }, extreme: { hp: 1.55, damage: 1.45 } }[this.difficulty];
+            configureWorldEnemy(monster, archetype, this.worldId, this.gameTime / 480, difficulty);
+            monsters.push(monster);
+            return monster;
+        }
     }
 
-    spawnBoss(bosses) {
-        const zi = rngInt(0, 2);
-        const z = this.zones[zi];
+    spawnBoss(bosses, targets = this.lastTargets) {
+        const humans = targets.filter(target => target.hp > 0 && !target.isBot);
+        const player = humans[this.bossIndex % Math.max(1, humans.length)] || targets.find(target => target.hp > 0);
+        if (!player || bosses.length >= 2) return;
+        const source = BOSS_TYPES[this.bossIndex++ % BOSS_TYPES.length];
         const angle = Math.random() * Math.PI * 2;
-        const r = rng(z.minR + 200, z.maxR - 200);
-        const x = Math.cos(angle) * r;
-        const y = Math.sin(angle) * r;
-        const bossType = BOSS_TYPES[Math.floor(Math.random() * BOSS_TYPES.length)];
-        const boss = new ServerBoss(x, y, bossType);
+        const bounds = getWorld(this.worldId).bounds - 100;
+        const clamp = value => Math.max(-bounds, Math.min(bounds, value));
+        const position = resolveWorldMovement({ x: clamp(player.x + Math.cos(angle) * 520), y: clamp(player.y + Math.sin(angle) * 520) }, this.worldId, source.sz * 0.5);
+        const participants = humans.filter(human => Math.hypot(human.x - position.x, human.y - position.y) <= 1400);
+        if (!participants.includes(player) && !player.isBot) participants.push(player);
+        const phase = (this.bossIndex - 1) % 3;
+        const difficulty = { easy: { hp: 0.8, damage: 0.75 }, medium: { hp: 1, damage: 1 },
+            hard: { hp: 1.25, damage: 1.2 }, extreme: { hp: 1.55, damage: 1.45 } }[this.difficulty];
+        const bossType = { ...source,
+            hp: balancedBossHealth([720, 1450, 2400][phase] * (1 + this.worldId * 1.7) * difficulty.hp, participants, difficulty.hp),
+            dmg: [14, 18, 22][phase] * (1 + this.worldId * 0.3) * difficulty.damage,
+            xp: [180, 260, 380][(this.bossIndex - 1) % 3] * (1 + this.worldId),
+            spd: source.id === 'archon' ? 1.3 : 1.1
+        };
+        const boss = new ServerBoss(position.x, position.y, bossType);
+        boss.spawnTimer = 2.5;
+        boss.worldId = this.worldId;
+        resolveWorldMovement(boss, this.worldId, boss.sz * 0.5);
         bosses.push(boss);
+        return boss;
+    }
+
+    separateMonsters(monsters) {
+        const cells = new Map();
+        const size = 140;
+        this.separationChecks = 0;
+        for (const monster of monsters) {
+            if (monster.hp <= 0) continue;
+            const cx = Math.floor(monster.x / size);
+            const cy = Math.floor(monster.y / size);
+            for (let ox = -1; ox <= 1; ox++) for (let oy = -1; oy <= 1; oy++) {
+                for (const other of cells.get(`${cx + ox},${cy + oy}`) || []) {
+                    this.separationChecks++;
+                    const dx = monster.x - other.x;
+                    const dy = monster.y - other.y;
+                    const minimum = (monster.sz + other.sz) * 0.65;
+                    const squared = dx * dx + dy * dy;
+                    if (squared >= minimum * minimum) continue;
+                    const distance = Math.sqrt(squared);
+                    const push = (minimum - distance) / Math.max(0.1, distance) * 0.25;
+                    const pushX = distance < 0.1 ? minimum * 0.1 : dx * push;
+                    monster.x += pushX;
+                    monster.y += dy * push;
+                    other.x -= pushX;
+                    other.y -= dy * push;
+                }
+            }
+            const key = `${cx},${cy}`;
+            if (!cells.has(key)) cells.set(key, []);
+            cells.get(key).push(monster);
+        }
     }
 
     update(dt, monsters, gameTime, bullets, targets, bosses) {
-        this.monsterSpawnTimer -= dt;
-        const diffMult = this.getDifficultyMultipliers();
-        const spawnDelay = (2.5 + Math.random() * 2.5) / (diffMult.spawnMult * 0.75);
-
-        if (this.monsterSpawnTimer <= 0) {
-            this.updateZoneCounts(monsters);
-            const playerCount = targets.length || 1;
-            const totalLimit = this.zoneLimits.reduce((sum, z) => sum + Math.ceil(z.limit / playerCount), 0);
-            const totalCurrent = this.zoneLimits.reduce((sum, z) => sum + z.current, 0);
-            if (totalCurrent < totalLimit) {
-                const spawnCount = Math.max(1, Math.ceil((totalLimit - totalCurrent) * 0.1));
-                for (let i = 0; i < spawnCount; i++) {
-                    this.spawnMonster(monsters, targets);
-                }
+        this.gameTime = gameTime;
+        this.lastTargets = targets;
+        const humans = targets.filter(target => target.hp > 0 && !target.isBot);
+        this.maxMonsters = Math.min(this.roomBudget, 64 * Math.max(1, humans.length));
+        const living = monsters.filter(monster => monster.hp > 0);
+        if (living.length > this.maxMonsters) {
+            // Reallocate immediately when a party splits across worlds. Keeping
+            // every old crowd would both exceed the room cap and overwhelm the
+            // few players remaining behind.
+            living.sort((a, b) => this.findNearestPlayer(b.x, b.y, targets) - this.findNearestPlayer(a.x, a.y, targets));
+            for (let i = 0; i < living.length - this.maxMonsters; i++) {
+                living[i].hp = 0;
+                living[i].isDespawning = true;
+                living[i].state = 'despawning';
             }
-            this.monsterSpawnTimer = spawnDelay;
         }
-
+        this.monsterSpawnTimer -= dt;
+        if (this.monsterSpawnTimer <= 0) {
+            const count = Math.min(12, Math.max(2, humans.length * 3));
+            for (let i = 0; i < count && monsters.length < this.maxMonsters; i++) this.spawnMonster(monsters, targets);
+            this.monsterSpawnTimer = Math.max(0.75, 1.8 / Math.sqrt(this.getDifficultyMultipliers().spawnMult));
+        }
         this.bossSpawnTimer -= dt;
         if (this.bossSpawnTimer <= 0) {
-            this.bossSpawnTimer = BOSS_SPAWN_INTERVAL;
-            this.spawnBoss(bosses);
+            this.spawnBoss(bosses, targets);
+            this.bossSpawnTimer = this.bossIndex % 3 === 2 ? 180 : 150;
         }
-
-        for (const m of monsters) {
-            m.update(dt, targets, bullets);
-        }
-
-        // Monster separation
-        for (let i = 0; i < monsters.length; i++) {
-            for (let j = i + 1; j < monsters.length; j++) {
-                const a = monsters[i];
-                const b = monsters[j];
-                const dx = b.x - a.x;
-                const dy = b.y - a.y;
-                const dist = Math.hypot(dx, dy);
-                const minDist = (a.sz + b.sz) * 0.8;
-                if (dist < minDist && dist > 0.1) {
-                    const push = (minDist - dist) / dist * 0.5;
-                    a.x -= dx * push;
-                    a.y -= dy * push;
-                    b.x += dx * push;
-                    b.y += dy * push;
-                }
+        const activityTargets = humans.length ? humans : targets;
+        for (const monster of monsters) {
+            if (monster.hp <= 0) continue;
+            if (this.findNearestPlayer(monster.x, monster.y, activityTargets) > 1900) {
+                monster.hp = 0;
+                monster.isDespawning = true;
+                monster.state = 'despawning';
+                continue;
             }
+            monster.update(dt, targets, bullets);
         }
-
-        if (bosses) {
-            for (const boss of bosses) {
-                boss.update(dt, targets, bullets);
-            }
+        this.separateMonsters(monsters);
+        for (const monster of monsters) if (monster.hp > 0) resolveWorldMovement(monster, this.worldId, monster.sz * 0.5);
+        for (const boss of bosses || []) if (boss.hp > 0) {
+            boss.update(dt, targets, bullets);
+            resolveWorldMovement(boss, this.worldId, boss.sz * 0.5);
         }
     }
 
     spawnXpOrbs(entity, xpOrbs) {
-        const count = rngInt(2, 4);
-        const xpPerOrb = entity.xp / count;
-        for (let i = 0; i < count; i++) {
-            const orb = new ServerXpOrb(
-                entity.x + rng(-30, 30),
-                entity.y + rng(-30, 30),
-                xpPerOrb + rng(0, xpPerOrb * 0.5)
-            );
-            xpOrbs.push(orb);
+        if (xpOrbs.length >= 450) {
+            let closest = null;
+            let distance = Infinity;
+            for (const orb of xpOrbs) {
+                const candidate = Math.hypot(orb.x - entity.x, orb.y - entity.y);
+                if (candidate < distance && orb.life > 0) { closest = orb; distance = candidate; }
+            }
+            if (closest) closest.val += entity.xp;
+            return;
         }
+        const count = Math.min(entity.isBoss ? 4 : 1, 450 - xpOrbs.length);
+        for (let i = 0; i < count; i++) xpOrbs.push(new ServerXpOrb(
+            entity.x + rng(-20, 20), entity.y + rng(-20, 20), entity.xp / count));
     }
 }

@@ -1,9 +1,10 @@
 // entities/Monster.js
 import { Entity } from './Entity.js';
-import { mkShape } from '../utils/geometry.js';
+import { mkShape, disposeObject } from '../utils/geometry.js';
 import { rng, getZoneIdx } from '../utils/math.js';
 import { Bullet } from './Bullet.js';
 import { MONSTER_CONFIG } from '../config/monsters.js';
+import { configureWorldEnemy } from '../../shared/systems/enemyBehavior.js';
 
 export class Monster extends Entity {
     constructor(x, y, zoneIdx, zones, scene, hpMult = 1.0, isBoss = false) {
@@ -13,6 +14,7 @@ export class Monster extends Entity {
         this.zones = zones;
         this.isBoss = isBoss;
         this.hitTimer = 0;
+        this.visualTime = 0;
         this.shootTimer = rng(2, 4);
         this.currentTarget = null;
         this.outsideZoneTimer = 0;
@@ -59,7 +61,7 @@ export class Monster extends Entity {
         this.spd = (z.monsterSpeed || 1.4) * eliteSpeedMult;
         this.sz = (base.sz + zoneMultiplier * bonus.sz) * (0.85 + sc * 0.05) * eliteSizeMult;
         this.xp = Math.round((base.xp + zoneMultiplier * bonus.xp) * sc * eliteXpMult);
-        this.baseColor = MONSTER_CONFIG.colors[Math.min(this.zoneIdx, MONSTER_CONFIG.colors.length - 1)];
+        this.baseColor = [0x9741ed, 0x9844eb, 0xa54cf0, 0xa34bed, 0xa64cf5][this.zoneIdx] || 0xa64cf5;
 
         this.spawnZoneMin = z.minR;
         this.spawnZoneMax = z.maxR;
@@ -67,13 +69,43 @@ export class Monster extends Entity {
         this.createMesh(this.type, this.sz, this.baseColor, this.isElite);
     }
 
-    getShapeForZone() {
-        const zi = this.zoneIdx;
-        const shapes = MONSTER_CONFIG.shapes;
-        if (zi <= 1) return shapes.low[Math.floor(Math.random() * 2)];
-        if (zi <= 3) return shapes.mid[Math.floor(Math.random() * 2)];
-        if (Math.random() < 0.05) return shapes.mid[Math.floor(Math.random() * 2)];
-        return shapes.high[Math.floor(Math.random() * 3)];
+    getShapeForZone() { return 'pent'; }
+
+    configureArchetype(archetype, worldId = 0, progress = 0, difficulty = {}) {
+        for (const mesh of [this.mesh, this.outline, this.glowRing, this.hpBarBg, this.hpBarFg]) disposeObject(mesh);
+        this.glowRing = null;
+        configureWorldEnemy(this, archetype, worldId, progress, difficulty);
+        this.createMesh(this.type, this.sz, this.baseColor, this.isElite);
+        return this;
+    }
+
+    syncTelegraph(state = {}) {
+        if (!Object.prototype.hasOwnProperty.call(state, 'telegraph')) return;
+        this.telegraph = state.telegraph;
+        const attack = this.telegraph;
+        const key = attack ? `${attack.type}:${attack.angle}` : null;
+        if (key !== this.warningKey) {
+            disposeObject(this.warningGroup);
+            this.warningGroup = null;
+            this.warningKey = key;
+            if (attack) {
+                this.warningGroup = new THREE.Group();
+                const ring = new THREE.Mesh(new THREE.RingGeometry(this.sz * 0.6 + 3, this.sz * 0.6 + 7, 24),
+                    new THREE.MeshBasicMaterial({ color: 0xffd84a, transparent: true, opacity: 0.85, depthWrite: false }));
+                this.warningGroup.add(ring);
+                if (attack.type !== 'ringcaster') {
+                    const length = attack.distance || 420;
+                    const width = attack.type === 'charger' ? this.sz * 1.1 : 13;
+                    const lane = new THREE.Mesh(new THREE.PlaneGeometry(length, width),
+                        new THREE.MeshBasicMaterial({ color: 0xff985b, transparent: true, opacity: 0.24, depthWrite: false }));
+                    lane.position.set(Math.cos(attack.angle) * length / 2, Math.sin(attack.angle) * length / 2, -0.1);
+                    lane.rotation.z = attack.angle;
+                    this.warningGroup.add(lane);
+                }
+                this.scene.add(this.warningGroup);
+            }
+        }
+        if (this.warningGroup) this.warningGroup.position.set(this.x, this.y, 1.6);
     }
 
     getLighterColor(color) {
@@ -84,18 +116,18 @@ export class Monster extends Entity {
     }
 
     createMesh(shapeType, size, color, isElite = false) {
-        const meshColor = isElite ? this.getLighterColor(color) : color;
+        const meshColor = color;
 
         this.mesh = mkShape(shapeType, size, meshColor);
         this.mesh.position.set(this.x, this.y, 2);
         this.scene.add(this.mesh);
 
-        this.createOutline(shapeType, size * 1.2, isElite ? 0xffff00 : 0x000000, isElite ? 0.6 : 0.2, 1.9);
+        this.createOutline(shapeType, size * 1.18, 0x352044, 1, 1.9);
 
         if (isElite) {
-            this.glowRing = mkShape(shapeType, size * 1.4, 0xffaa00);
-            this.glowRing.material.transparent = true;
-            this.glowRing.material.opacity = 0.3;
+            this.glowRing = mkShape(shapeType, size * 1.42, 0xffed48);
+            this.glowRing.material.transparent = false;
+            this.glowRing.material.opacity = 1;
             this.glowRing.position.set(this.x, this.y, 1.8);
             this.scene.add(this.glowRing);
         }
@@ -104,14 +136,14 @@ export class Monster extends Entity {
     }
 
     createHealthBar(size, isElite = false) {
-        const barWidth = this.isBoss ? size * 2 : size * 1.6;
-        const barHeight = this.isBoss ? 6 : 3;
-        const barOffset = this.isBoss ? size + 10 : size + 4;
-        const bgColor = isElite || this.isBoss ? 0x442200 : 0x220000;
-        const fgColor = this.isBoss ? 0xff0000 : (isElite ? 0xffaa00 : 0xff3333);
+        const barWidth = this.isBoss ? size * 2 : size * 1.5;
+        const barHeight = this.isBoss ? 7 : 5;
+        const barOffset = -(this.isBoss ? size + 12 : size * 0.7 + 9);
+        const bgColor = 0x201b2b;
+        const fgColor = this.isBoss ? 0xff8744 : 0x37e348;
 
         this.hpBarBg = new THREE.Mesh(
-            new THREE.PlaneGeometry(barWidth, barHeight),
+            new THREE.PlaneGeometry(barWidth + 4, barHeight + 4),
             new THREE.MeshBasicMaterial({ color: bgColor })
         );
         this.hpBarBg.position.set(this.x, this.y + barOffset, 2.5);
@@ -418,6 +450,7 @@ export class Monster extends Entity {
         const tdx = targetX - this.x;
         const tdy = targetY - this.y;
         const tdist = Math.hypot(tdx, tdy);
+        if (tdist < 0.001) return;
 
         let moveX = tdx / tdist;
         let moveY = tdy / tdist;
@@ -443,6 +476,7 @@ export class Monster extends Entity {
         const dx = target.x - this.x;
         const dy = target.y - this.y;
         const len = Math.hypot(dx, dy);
+        if (len < 0.001) return;
 
         const bulletColor = this.isBoss ? 0xff00ff : (this.isElite ? 0xffaa44 : 0xff6666);
         const bulletSize = this.isBoss ? 1.5 : (this.isElite ? 1.2 : 1);
@@ -459,17 +493,20 @@ export class Monster extends Entity {
     }
 
     updateVisuals(dt) {
+        this.visualTime += dt;
+        if (!this.isBoss) this.syncTelegraph({ telegraph: this.telegraph || null });
         this.mesh.position.set(this.x, this.y, 2);
         this.outline.position.set(this.x, this.y, 1.9);
 
-        const rotationSpeed = this.state === 'despawning' ? 2.0 : 0.8;
+        const rotationSpeed = this.state === 'despawning' ? 1.2 : 0.18;
         this.mesh.rotation.z += dt * rotationSpeed;
         this.outline.rotation.z = this.mesh.rotation.z;
 
         if (this.glowRing) {
             this.glowRing.position.set(this.x, this.y, 1.8);
-            this.glowRing.rotation.z -= dt * 1.5;
-            this.glowRing.material.opacity = 0.3 + Math.sin(Date.now() * 0.005) * 0.15;
+            this.glowRing.rotation.z = this.mesh.rotation.z;
+            const rimScale = this.glowRing.userData.baseScale * (1 + Math.sin(this.visualTime * 3) * 0.025);
+            this.glowRing.scale.set(rimScale, rimScale, 1);
         }
 
         this.updateHealthBar();
@@ -478,6 +515,7 @@ export class Monster extends Entity {
     }
 
     updatePosition() {
+        if (this.warningGroup) this.warningGroup.position.set(this.x, this.y, 1.6);
         if (this.mesh) {
             this.mesh.position.set(this.x, this.y, 2);
         }
@@ -499,8 +537,8 @@ export class Monster extends Entity {
             ? Math.max(0, Math.min(1, this.hp / this.maxHp))
             : 0;
 
-        const barWidth = this.isBoss ? this.sz * 2 : this.sz * 1.6;
-        const barOffset = this.isBoss ? this.sz + 10 : this.sz + 4;
+        const barWidth = this.isBoss ? this.sz * 2 : this.sz * 1.5;
+        const barOffset = -(this.isBoss ? this.sz + 12 : this.sz * 0.7 + 9);
 
         this.hpBarBg.position.set(this.x, this.y + barOffset, 2.5);
 
@@ -512,15 +550,15 @@ export class Monster extends Entity {
 
         this.hpBarFg.scale.x = hpPct;
 
-        this.hpBarBg.visible = this.hp > 0 && this.hp < this.maxHp;
-        this.hpBarFg.visible = this.hp > 0 && this.hp < this.maxHp;
+        this.hpBarBg.visible = this.hp > 0;
+        this.hpBarFg.visible = this.hp > 0;
     }
     updateHitEffect(dt) {
         if (this.hitTimer > 0) {
             this.hitTimer -= dt;
             this.mesh.material.color.setHex(0xffffff);
         } else {
-            const color = this.isBoss ? this.baseColor : (this.isElite ? this.getLighterColor(this.baseColor) : this.baseColor);
+            const color = this.baseColor;
             this.mesh.material.color.setHex(color);
         }
     }
@@ -533,7 +571,8 @@ export class Monster extends Entity {
 
         this.mesh.material.transparent = fading;
         this.mesh.material.opacity = opacity;
-        this.outline.material.opacity = (this.isElite ? 0.6 : 0.2) * opacity;
+        this.outline.material.opacity = opacity;
+        this.outline.material.transparent = fading;
     }
 
     takeDamage(amount, attacker = null) {
@@ -561,8 +600,9 @@ export class Monster extends Entity {
 
     destroy() {
         super.destroy();
-        this.removeMesh(this.glowRing);
-        this.removeMesh(this.hpBarBg);
-        this.removeMesh(this.hpBarFg);
+        disposeObject(this.warningGroup);
+        disposeObject(this.glowRing);
+        disposeObject(this.hpBarBg);
+        disposeObject(this.hpBarFg);
     }
 }

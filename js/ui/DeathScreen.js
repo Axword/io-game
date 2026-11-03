@@ -1,4 +1,5 @@
 import { PERM_DEFS } from '../config/constants.js';
+import { iconMarkup } from './Icons.js';
 
 export class DeathScreen {
     constructor(onPermScreen, onPlayAgain) {
@@ -109,7 +110,7 @@ export class DeathScreen {
             const el = document.createElement('div');
             el.className = 'perm-card';
             el.innerHTML = `
-                <div class="perm-icon">${pd.icon}</div>
+                <div class="perm-icon">${iconMarkup(pd.id === 'hp' ? 'heart' : pd.id)}</div>
                 <div class="perm-name">${pd.name}</div>
                 <div class="perm-val">${pd.desc}</div>
                 <div class="perm-curr">Aktualnie: ${cur}${pd.unit} → ${cur + pd.step}${pd.unit}</div>

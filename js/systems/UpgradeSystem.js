@@ -1,3 +1,4 @@
+import { applyBookStatsDelta } from '../../shared/systems/bookStats.js';
 import { WEAPONS, ALL_WEAPONS } from '../config/weapons.js';
 import { BOOKS, ALL_BOOKS } from '../config/books.js';
 import { UPGRADE_TYPES } from '../config/upgrades.js';
@@ -10,8 +11,8 @@ export class UpgradeSystem {
         this.permStats = permStats;
     }
 
-    rollRarity() {
-        const luck = this.permStats.luck;
+    rollRarity(player) {
+        const luck = player?.luck || this.permStats.luck || 0;
         const weights = RARITIES.map((r, i) => {
             const boost = i * luck * 0.02;
             return Math.max(0.01, r.w + boost);
@@ -53,7 +54,7 @@ export class UpgradeSystem {
         const availNewBooks = ALL_BOOKS.filter(t => !ownedBookTypes.includes(t));
 
         // 25% szans na nową broń
-        if (emptyWeaponSlot > -1 && availNewWeapons.length > 0 && Math.random() < 0.25) {
+        if (emptyWeaponSlot > -1 && availNewWeapons.length > 0 && ((player.level === 2 && ownedWeaponTypes.length === 1) || Math.random() < 0.25)) {
             const wt = availNewWeapons[Math.floor(Math.random() * availNewWeapons.length)];
             const wd = WEAPONS[wt];
             cards.push({
@@ -215,7 +216,7 @@ export class UpgradeSystem {
         for (const upgrade of selected) {
             const { itemType, item, itemTypeId, upgradeId, upgradeType, upgradeKey, isDuplicate } = upgrade;
 
-            const rarId = this.rollRarity();
+            const rarId = this.rollRarity(player);
             let value = this.getRarityValue(upgradeType, rarId);
 
             // Zmniejsz wartość dla duplikatów
@@ -380,38 +381,8 @@ export class UpgradeSystem {
 
     applyBookStats(player, bookType) {
         const book = player.books.find(b => b && b.type === bookType);
-        if (!book) return;
-
-        const bd = BOOKS[bookType];
-        const level = book.level || 1;
-
-        // Zastosuj efekty księgi
-        if (bookType === 'vitality') {
-            const baseHp = CLASSES[player.cls].hp;
-            player.maxHp += Math.round(baseHp * book.stats.maxHp * level);
-            player.hp = Math.min(player.maxHp, player.hp + Math.round(baseHp * book.stats.maxHp * level));
-        } else if (bookType === 'speed') {
-            player.speed *= (1 + book.stats.moveSpeed * level);
-        } else if (bookType === 'cooldown') {
-            player.cooldownReduction = (player.cooldownReduction || 0) + (book.stats.cooldownReduction * level);
-        } else if (bookType === 'magnet') {
-            player.magnetRange = (player.magnetRange || 100) + (book.stats.magnetRange * level);
-        } else if (bookType === 'critical') {
-            player.critChance = (player.critChance || 0) + (book.stats.critChance * level);
-            player.critDamage = (player.critDamage || 150) + (book.stats.critDamage * level);
-        } else if (bookType === 'damage') {
-            player.damageBonus = (player.damageBonus || 0) + (book.stats.damageBonus * level);
-        } else if (bookType === 'area') {
-            player.areaBonus = (player.areaBonus || 0) + (book.stats.areaBonus * level);
-        } else if (bookType === 'luck') {
-            this.permStats.luck = (this.permStats.luck || 0) + (book.stats.luck * level);
-        } else if (bookType === 'revival') {
-            player.revives = (player.revives || 0) + (book.stats.revives * level);
-        } else if (bookType === 'regeneration') {
-            player.regen = (player.regen || 0) + (book.stats.regen * level);
-        }
+        if (book) applyBookStatsDelta(player, book);
     }
-
     getStatName(upgradeId, weaponType) {
         if (weaponType === 'sword') {
             if (upgradeId === 'range') return 'orbit';

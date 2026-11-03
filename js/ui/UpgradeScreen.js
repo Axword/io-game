@@ -1,53 +1,40 @@
 import { RARITIES } from '../config/constants.js';
-
+import { iconMarkup } from './Icons.js';
+const escapeText = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
 export class UpgradeScreen {
     constructor(onUpgradeSelect) {
         this.screen = document.getElementById('s-upgrade');
         this.container = document.getElementById('up-cards');
         this.onUpgradeSelect = onUpgradeSelect;
     }
-    
-    show(cards) {
-        this.container.innerHTML = '';
-        
-        for (const c of cards) {
-            const rar = RARITIES[c.rarId];
-            const el = document.createElement('div');
+    show(cards = []) {
+        this.container.replaceChildren();
+        this.selectionPending = false;
+        for (const [index, card] of cards.entries()) {
+            const rarity = RARITIES[card.rarId] || RARITIES[0];
+            const el = document.createElement('button');
+            el.type = 'button';
             el.className = 'up-card';
-            el.style.background = rar.bg;
-            el.style.borderColor = rar.border;
-            el.style.boxShadow = `0 0 20px ${rar.border}`;
-            
-            // Dodaj animację wejścia
-            el.style.animation = 'cardEnter 0.3s ease-out';
-            
-            el.innerHTML = `
-                <div class="up-icon" style="animation: iconPulse 2s infinite;">${c.icon}</div>
-                <div class="up-wname">${c.wname}</div>
-                <div class="up-name">${c.name}</div>
-                <div class="up-desc">${c.desc}</div>
-                ${c.val ? `<div class="up-val" style="color:${rar.col}">${c.val}</div>` : ''}
-                <span class="up-rar" style="color:${rar.col};border-color:${rar.border}">${rar.name}</span>
-            `;
-            
-            el.addEventListener('mouseenter', () => {
-                el.style.transform = 'scale(1.05)';
-                el.style.boxShadow = `0 0 30px ${rar.border}`;
+            el.dataset.upgradeKey = card.upgradeKey || String(index);
+            el.style.background = rarity.bg;
+            el.style.borderColor = rarity.border;
+            el.style.animation = 'cardEnter .24s ease-out both';
+            el.style.animationDelay = (index * .055) + 's';
+            const icon = card.itemId || card.weaponType || card.bookType || card.upgradeId || card.icon;
+            el.innerHTML = '<div class="up-icon">' + iconMarkup(icon) + '</div>' +
+                '<div class="up-wname">' + escapeText(card.wname) + '</div>' +
+                '<div class="up-name">' + escapeText(card.name) + '</div>' +
+                '<div class="up-desc">' + escapeText(card.desc) + '</div>' +
+                (card.val ? '<div class="up-val" style="color:' + rarity.col + '">' + escapeText(card.val) + '</div>' : '') +
+                '<span class="up-rar" style="color:' + rarity.col + ';border-color:' + rarity.border + '">' + rarity.name + '</span>';
+            el.addEventListener('click', () => {
+                if (this.selectionPending) return;
+                this.selectionPending = true;
+                this.onUpgradeSelect(card);
             });
-            
-            el.addEventListener('mouseleave', () => {
-                el.style.transform = 'scale(1)';
-                el.style.boxShadow = `0 0 20px ${rar.border}`;
-            });
-            
-            el.addEventListener('click', () => this.onUpgradeSelect(c));
             this.container.appendChild(el);
         }
-        
         this.screen.style.display = 'flex';
     }
-    
-    hide() {
-        this.screen.style.display = 'none';
-    }
+    hide() { this.screen.style.display = 'none'; }
 }
